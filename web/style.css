@@ -86,6 +86,12 @@ body {
 .doc.sub .del:hover { color: #d6311f; }
 .meta-ops { margin-left: 8px; }
 .meta-ops .mini2 { margin-left: 4px; }
+.block-menu { position: absolute; right: -2px; top: 0; color: var(--fg-3); font-size: 15px; cursor: pointer; padding: 0 6px; user-select: none; }
+.blk.edit { position: relative; }
+.mark-menu { position: fixed; z-index: 100; background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.12); padding: 5px; display: flex; flex-direction: column; }
+.mark-menu button { border: none; background: none; padding: 7px 12px; font-size: 13px; text-align: left; border-radius: 7px; cursor: pointer; font-family: inherit; color: var(--fg); }
+.mark-menu button:hover { background: var(--accent-soft); color: var(--accent); }
+.ai-card.sug-card .sug-item .r { font-size: 11px; color: var(--fg-3); margin-top: 3px; }
 .doc.newdraft { color: var(--fg-3); font-size: 12px; }
 .doc.newdraft:hover { color: var(--accent); background: transparent; }
 

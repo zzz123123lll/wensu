@@ -140,6 +140,8 @@ function openArticle(aid) {
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     $('#doc-scroll').scrollTop = 0;
     showInsightIdle(); // 默认不自动调用模型（WEN-009 安全默认）
+    reportSignal('draft_open', { blocks_count: a.blocks.length }); // Phase 6 信号
+    loadSuggestions(); // 规则建议（无模型也可用）
   }).catch(e => toast_('打开失败：' + e.message));
 }
 
@@ -203,6 +205,30 @@ function bindEditor() {
     if (block) {
       block.classList.toggle('empty', block.textContent === '');
       markDirty(currentAid);
+    }
+  });
+  // 块标记入口：hover 显示 ⋯，点击弹问题菜单（Phase 6 显式信号）
+  art.addEventListener('mouseover', e => {
+    const block = e.target.closest ? e.target.closest('.blk.edit') : null;
+    if (block && !block.querySelector('.block-menu') && block.textContent.trim()) {
+      const m = document.createElement('span');
+      m.className = 'block-menu';
+      m.textContent = '⋯';
+      m.title = '标记这段的问题';
+      m.setAttribute('aria-label', '标记问题');
+      block.appendChild(m);
+    }
+  });
+  art.addEventListener('mouseleave', () => {
+    document.querySelectorAll('#article .block-menu').forEach(m => m.remove());
+  });
+  art.addEventListener('click', e => {
+    const btn = e.target.closest ? e.target.closest('.block-menu') : null;
+    if (btn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const block = btn.closest('.blk.edit');
+      showMarkMenu(btn, block);
     }
   });
 }
@@ -357,6 +383,87 @@ function firstBlock() {
   return document.querySelector('#article .blk.edit');
 }
 
+/* ---------- 写作智能信号上报（Phase 6：显式信号，不落正文） ---------- */
+function reportSignal(type, extra = {}) {
+  if (!currentAid) return;
+  fetch('/api/signals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ article_id: currentAid, type, ...extra }),
+  }).catch(() => {});
+}
+
+/* 规则建议：打开草稿/手动标记后拉取（无模型配置也可用） */
+async function loadSuggestions() {
+  if (!currentAid) return;
+  try {
+    const r = await api('/api/copilot/suggest', { method: 'POST', body: JSON.stringify({ article_id: currentAid }) });
+    renderCopilotSuggestions(r.suggestions || []);
+  } catch { /* 建议失败不打扰 */ }
+}
+
+function renderCopilotSuggestions(sugs) {
+  document.querySelectorAll('.ai-card.sug-card').forEach(c => c.remove());
+  if (!sugs.length) return;
+  const card = document.createElement('div');
+  card.className = 'ai-card sug-card';
+  const iconFor = a => a === 'search'
+    ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>'
+    : a === 'check'
+      ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4.5L6.5 11 3 7.5"/><circle cx="8" cy="8" r="6.5"/></svg>'
+      : a === 'rewrite'
+        ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2l3 3L5.5 13.5 2 14l.5-3.5L11 2z"/></svg>'
+        : a === 'structure'
+          ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="2" width="12" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1"/></svg>'
+          : '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v12M8 2l-3 3M8 2l3 3M8 14l-3-3M8 14l3-3"/></svg>';
+  card.innerHTML = '<div class="ai-head">写作助手建议 <span class="cnt">' + sugs.length + '</span></div>' +
+    sugs.map(s => `<div class="sug-item" data-t="${s.type}" data-bid="${escapeHtml(s.target_block_id || '')}">
+      <span class="s-ic">${iconFor(s.type)}</span>
+      <div class="s-main"><div class="t">${escapeHtml(s.title)}</div>
+      <div class="d">${escapeHtml(s.description)}</div>
+      <div class="r">${escapeHtml(s.reason)}</div>
+      <div class="res-acts"><button class="mini2" data-x="run">执行</button><button class="mini2" data-x="dismiss">关闭</button></div>
+      </div></div>`).join('');
+  const flow = $('#cardflow');
+  flow.prepend(card);
+  card.querySelectorAll('[data-x="run"]').forEach((b, i) => b.onclick = () => runSuggestion(sugs[i]));
+  card.querySelectorAll('[data-x="dismiss"]').forEach((b, i) => b.onclick = async () => {
+    const s = sugs[i];
+    await api('/api/signals', { method: 'POST', body: JSON.stringify({ article_id: currentAid, type: 'dismiss' }) }).catch(() => {});
+    card.remove();
+    toast_('已关闭这类建议');
+  });
+}
+
+function runSuggestion(s) {
+  const block = s.target_block_id ? document.querySelector(`#article .blk.edit[data-bid="${s.target_block_id}"]`) : firstBlock();
+  if (s.type === 'rewrite') runRewrite(block || firstBlock());
+  else if (s.type === 'search') runSearch(block || firstBlock());
+  else if (s.type === 'check') runCheck(block || firstBlock());
+  else if (s.type === 'structure') loadInsight(currentAid);
+  else if (s.type === 'ask') { $('#ask-input').focus(); }
+}
+
+/* 块标记菜单：表达不顺 / 需要资料 / 需要结构 / 需要观点 */
+function showMarkMenu(btn, block) {
+  const menu = document.createElement('div');
+  menu.className = 'mark-menu';
+  menu.innerHTML = '<button data-i="expression">表达不顺</button><button data-i="facts">需要资料</button><button data-i="structure">需要结构</button><button data-i="ideas">需要观点</button>';
+  document.body.appendChild(menu);
+  const r = btn.getBoundingClientRect();
+  menu.style.left = Math.min(r.left, window.innerWidth - 150) + 'px';
+  menu.style.top = (r.bottom + 4) + 'px';
+  const close = () => menu.remove();
+  menu.querySelectorAll('button').forEach(b => b.onclick = () => {
+    const issue = b.dataset.i;
+    reportSignal('mark', { issue, focus: 'block', block_id: block.dataset.bid });
+    loadSuggestions();
+    toast_('已标记：' + b.textContent);
+    close();
+  });
+  setTimeout(() => document.addEventListener('click', close, { once: true }), 0);
+}
+
 /* 精确选区：捕获选中文本 + UTF-16 偏移（相对目标 Block） */
 function captureSelection(block) {
   const s = window.getSelection();
@@ -398,9 +505,10 @@ async function runRewrite(target) {
     card.innerHTML = '<div class="ai-head">改写候选</div>'
       + r.candidates.map(c => `<div class="opt"><span class="tag">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</div>`).join('')
       + '<div class="acts"><button class="btn btn-g" data-x="rej">拒绝</button><button class="btn btn-p" data-x="acc">接受方案一</button></div>';
-    card.querySelector('[data-x="rej"]').onclick = () => card.remove();
+    card.querySelector('[data-x="rej"]').onclick = () => { reportSignal('reject', { focus: 'block' }); card.remove(); };
     card.querySelector('[data-x="acc"]').onclick = () => {
       pushUndo(currentAid); // 可撤销点（WEN-023）
+      reportSignal('accept', { focus: 'block' });
       const newText = r.candidates[0].text;
       if (sel && sel.start_utf16 !== undefined) {
         applySelectionToBlock(target, sel, newText); // 精确替换选中文字
@@ -417,7 +525,9 @@ async function runRewrite(target) {
     card.innerHTML = '<div class="ai-head">改写失败：' + escapeHtml(e.message) + '</div>';
   }
 }
-$('#tool-rw').addEventListener('click', () => runRewrite(anchorFromSel()));
+$('#tool-rw').addEventListener('click', () => { reportSignal('tool_click', { tool: 'rewrite', focus: 'block' }); runRewrite(anchorFromSel()); });
+$('#ask-send').addEventListener('click', () => { reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
+$('#ask-input').addEventListener('keydown', e => { if (e.key === 'Enter') reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 
 /* ========== 洞察链路（手动触发，安全默认：打开草稿不自动调用模型） ========== */
 function showInsightIdle() {
@@ -700,10 +810,11 @@ async function runCheck(target) {
       <div class="acts">${r.suggestion
         ? '<button class="btn btn-g" data-x="rej">忽略</button><button class="btn btn-p" data-x="acc">采用建议</button>'
         : '<button class="btn btn-g" data-x="rej">知道了</button>'}</div>`;
-    card.querySelector('[data-x="rej"]').onclick = () => card.remove();
+    card.querySelector('[data-x="rej"]').onclick = () => { reportSignal('reject', { focus: 'block' }); card.remove(); };
     const acc = card.querySelector('[data-x="acc"]');
     if (acc) acc.onclick = () => {
       pushUndo(currentAid); // 可撤销点（WEN-023）
+      reportSignal('accept', { focus: 'block' });
       if (sel && sel.start_utf16 !== undefined) {
         applySelectionToBlock(target, sel, r.suggestion); // 精确替换选中文字
       } else {
@@ -721,9 +832,9 @@ async function runCheck(target) {
   }
 }
 
-/* 搜索/核验 工具坞（真链路） */
-$('#tool-sr').addEventListener('click', () => runSearch(anchorFromSel()));
-$('#tool-ck').addEventListener('click', () => runCheck(anchorFromSel()));
+/* 搜索/核验 工具坞（真链路 + 信号上报） */
+$('#tool-sr').addEventListener('click', () => { reportSignal('tool_click', { tool: 'search', focus: 'block' }); runSearch(anchorFromSel()); });
+$('#tool-ck').addEventListener('click', () => { reportSignal('tool_click', { tool: 'check', focus: 'block' }); runCheck(anchorFromSel()); });
 
 /* 关闭/隐藏前 best-effort flush；可靠性由 IndexedDB 恢复副本 + 正常保存保证 */
 window.addEventListener('pagehide', () => {

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import ai_service, blocks, db, safe_fetch, settings
+from app import ai_service, blocks, copilot, db, safe_fetch, settings
 from app.llm import LLMError
 from app.schemas import Block
 
@@ -119,6 +119,21 @@ class CitationIn(BaseModel):
 
 class FetchIn(BaseModel):
     url: str
+
+
+class SignalIn(BaseModel):
+    article_id: int
+    type: str  # tool_click|accept|reject|dismiss|mark|draft_open
+    tool: str | None = None
+    issue: str | None = None
+    focus: str | None = None
+    block_id: str | None = None
+
+
+class SuggestIn(BaseModel):
+    article_id: int
+    block_id: str | None = None
+    issue: str | None = None
 
 
 def _ai_error(e: LLMError) -> HTTPException:
@@ -492,6 +507,38 @@ def api_restore_revision(aid: int, version: int):
         except db.NotFoundError as e:
             raise HTTPException(404, str(e))
         return {"ok": True, "version": new_version}
+    finally:
+        conn.close()
+
+
+@app.post("/api/signals")
+def api_signals(body: SignalIn):
+    """写作行为信号上报（显式：工具点击/接受/拒绝/标记）。不落正文，只存最小元数据。"""
+    copilot.record_signal(body.article_id, body.model_dump())
+    return {"ok": True}
+
+
+@app.post("/api/copilot/suggest")
+def api_copilot_suggest(body: SuggestIn):
+    """规则优先建议：无模型配置时规则建议仍工作；每条建议可解释（reason/target/source）。"""
+    conn = _conn()
+    try:
+        s = settings.get_settings(conn)
+        state = copilot.signals_to_state(copilot.get_signals(body.article_id))
+        ctx = {
+            "stage": state["stage"],
+            "issue": body.issue or state["issue"],
+            "focus": body.block_id or state["focus"],
+            "block_id": body.block_id,
+            "article_id": body.article_id,
+            "model_configured": s["configured"],
+        }
+        engine = copilot.CopilotEngine(dismissed=copilot.get_dismissed(body.article_id))
+        sugs = engine.suggest(ctx)
+        if body.issue and sugs:
+            # 手动标记后刷新建议：把标记也记入信号（保持状态一致）
+            copilot.record_signal(body.article_id, {"type": "mark", "issue": body.issue, "focus": body.block_id or "article"})
+        return {"suggestions": sugs, "state": state}
     finally:
         conn.close()
 
