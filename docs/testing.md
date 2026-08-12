@@ -3,7 +3,7 @@
 ## 后端（pytest，项目 venv Python 3.12）
 
 ```
-cd D:\ai-writing-system
+cd D:\文序项目\ai-writing-system
 env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q
 ```
 

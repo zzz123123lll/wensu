@@ -15,7 +15,7 @@
 ## 安装
 
 ```bash
-cd D:\ai-writing-system
+cd D:\文序项目\ai-writing-system
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 ```
