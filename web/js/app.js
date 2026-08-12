@@ -1,31 +1,16 @@
-/* 文序 · 前端逻辑（第一阶段：真数据 + Block 编辑 + 自动保存） */
+/* 文序 · 前端 bootstrap（UI 逻辑；工具与状态机在 js/ 模块） */
 'use strict';
 
-const $ = s => document.querySelector(s);
-const toast = $('#toast');
+import { api } from './api.js';
+import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks } from './state.js';
+import { escapeHtml, safeUrl } from './security.js';
+
 let projects = [];          // [{id, name}]
 let expanded = {};          // pid -> bool
 let currentAid = null;      // 当前打开草稿 id
 let currentPid = null;
-
-function toast_(m) {
-  toast.textContent = m;
-  toast.classList.add('show');
-  clearTimeout(toast_._t);
-  toast_._t = setTimeout(() => toast.classList.remove('show'), 1800);
-}
-
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(res.status + ' ' + t.slice(0, 100));
-  }
-  return res.json();
-}
+let articleReqSeq = 0;  // 打开文章请求序号：迟到的响应不得覆盖新稿
+let insightAbort = null; // 洞察请求取消句柄
 
 /* ---------- 左栏 ---------- */
 async function loadProjects() {
@@ -76,10 +61,6 @@ async function loadArticles(pid) {
   box.querySelectorAll('.doc[data-aid]').forEach(d => d.addEventListener('click', () => openArticle(+d.dataset.aid)));
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 /* ---------- 命名浮层 ---------- */
 function inlineName(placeholder, cb) {
   const wrap = document.createElement('div');
@@ -94,14 +75,11 @@ function inlineName(placeholder, cb) {
 }
 
 /* ---------- 中间区：Block 编辑器 ---------- */
-let articleReqSeq = 0;  // 打开文章请求序号：迟到的响应不得覆盖新稿
-let insightAbort = null; // 洞察请求取消句柄
-
 function openArticle(aid) {
   const seq = ++articleReqSeq;
   // 切稿前 flush 旧稿：清 timer + 立即保存旧稿（per-aid 状态，不会写错稿）
   if (currentAid && currentAid !== aid) {
-    clearTimeout(saveTimer);
+    cancelPendingSave();
     const old = sstate(currentAid);
     if (old.dirty) saveNow(currentAid);
   }
@@ -139,86 +117,6 @@ function blockHtml(b) {
     return `<blockquote class="blk edit" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</blockquote>`;
   }
   return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</div>`;
-}
-
-/* ========== 保存状态机（每草稿独立状态，防串稿/丢稿） ========== */
-const saveStates = new Map();  // aid -> state
-let saveTimer = null;
-
-function sstate(aid) {
-  if (!saveStates.has(aid)) {
-    saveStates.set(aid, {
-      aid,
-      baseVersion: 1,
-      editRevision: 0,
-      ackedRevision: 0,
-      snapshotHash: '',
-      inFlight: null,        // {aid, revision, hash}
-      pendingAfterSave: false,
-      dirty: false,
-      status: 'clean',       // clean|dirty|saving|saved|conflict|offline|recovery-failed
-    });
-  }
-  return saveStates.get(aid);
-}
-
-function domHash() {
-  // 当前正文的轻量 hash（用于 ACK 校验快照是否仍是最新）
-  let h = 0;
-  for (const b of document.querySelectorAll('#article .blk.edit')) {
-    for (const ch of b.textContent) h = (h * 31 + ch.codePointAt(0)) | 0;
-  }
-  return (h >>> 0).toString(36);
-}
-
-const SAVE_LABEL = {
-  clean: '', dirty: '未保存', saving: '保存中…', saved: '已保存',
-  conflict: '冲突', offline: '离线待重试', 'recovery-failed': '本地副本未建立',
-};
-
-function setSaveStatus(st, status) {
-  st.status = status;
-  const el = $('#save-status');
-  if (el) {
-    const label = SAVE_LABEL[status] || status;
-    el.textContent = label;
-    el.className = 'save-status ' + status;
-    if (status === 'saved' || status === 'clean') {
-      clearTimeout(setSaveStatus._t);
-      setSaveStatus._t = setTimeout(() => { el.textContent = ''; el.className = 'save-status'; }, 2000);
-    }
-  }
-}
-
-/* ---------- IndexedDB 恢复副本 ---------- */
-const RECOVERY_DB = 'wensu-recovery';
-const RECOVERY_STORE = 'drafts';
-function openRecoveryDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(RECOVERY_DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(RECOVERY_STORE, { keyPath: 'article_id' });
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-function writeRecovery(aid, baseVersion, snapshot, editRevision, hash) {
-  return openRecoveryDb().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(RECOVERY_STORE, 'readwrite');
-    tx.objectStore(RECOVERY_STORE).put({
-      article_id: aid, base_version: baseVersion, snapshot,
-      edit_revision: editRevision, snapshot_hash: hash, queued_at: Date.now(),
-    });
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-function clearRecovery(aid) {
-  return openRecoveryDb().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(RECOVERY_STORE, 'readwrite');
-    tx.objectStore(RECOVERY_STORE).delete(aid);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  }));
 }
 
 /* ---------- 事件委托（Enter 新建块后输入仍触发保存） ---------- */
@@ -273,117 +171,6 @@ function bindEditor() {
       markDirty(currentAid);
     }
   });
-}
-
-function markDirty(aid) {
-  if (!aid) return;
-  const st = sstate(aid);
-  st.dirty = true;
-  st.editRevision += 1;
-  st.snapshotHash = domHash();
-  setSaveStatus(st, 'dirty');
-  scheduleSave(aid);
-}
-
-function scheduleSave(aid) {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveNow(aid), 1200);
-}
-
-async function saveNow(aid, reason = 'autosave') {
-  const st = sstate(aid);
-  if (!st.dirty) return;
-  if (st.inFlight) { st.pendingAfterSave = true; return; } // 在途：标记，ACK 后发最新
-  const snapshot = collectBlocks();
-  st.dirty = false;
-  st.inFlight = { aid, revision: st.editRevision, hash: st.snapshotHash };
-  setSaveStatus(st, 'saving');
-  // 先写 IndexedDB 恢复副本（失败/超时不得阻塞保存，但不得谎报"已保存"）
-  let recoveryOk = false;
-  try {
-    await Promise.race([
-      writeRecovery(aid, st.baseVersion, snapshot, st.editRevision, st.snapshotHash),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('IndexedDB 超时')), 800)),
-    ]);
-    recoveryOk = true;
-  } catch {
-    setSaveStatus(st, 'recovery-failed');
-    toast_('本地恢复副本未建立，请勿关闭页面');
-  }
-  try {
-    const resp = await fetch(`/api/articles/${aid}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: snapshot, base_version: st.baseVersion, change_reason: reason }),
-    });
-    if (resp.status === 409) {
-      const d = await resp.json().catch(() => ({}));
-      st.inFlight = null;
-      st.dirty = false;
-      setSaveStatus(st, 'conflict');
-      showConflict(aid, (d.detail && d.detail.current_version) || st.baseVersion);
-      return;
-    }
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const d = await resp.json();
-    st.baseVersion = d.version;
-    // 只有 ACK 对应 revision/hash 等于当前，才显示"已保存"
-    if (st.inFlight && st.inFlight.revision === st.editRevision && st.inFlight.hash === st.snapshotHash) {
-      st.ackedRevision = st.editRevision;
-      setSaveStatus(st, recoveryOk ? 'saved' : 'saved');
-      if (!recoveryOk) toast_('已保存，但本地恢复副本未建立');
-    }
-    st.inFlight = null;
-    clearRecovery(aid).catch(() => {});
-    if (st.pendingAfterSave) {
-      st.pendingAfterSave = false;
-      st.dirty = true;
-      scheduleSave(aid);
-    }
-  } catch (e) {
-    st.inFlight = null;
-    st.dirty = true;
-    setSaveStatus(st, 'offline');
-    toast_('保存失败，稍后自动重试：' + e.message);
-    scheduleSave(aid); // 重试最新快照
-  }
-}
-
-/* 409 冲突：本地快照已在 IndexedDB，服务端内容保留，给出恢复动作 */
-function showConflict(aid, serverVersion) {
-  const el = $('#save-status');
-  if (!el) return;
-  el.textContent = '冲突';
-  el.className = 'save-status conflict';
-  el.innerHTML = '冲突 <button class="mini2" id="conflict-local">保留本地</button><button class="mini2" id="conflict-server">用服务器版</button>';
-  $('#conflict-local').onclick = () => {
-    openRecoveryDb().then(db => new Promise(res => {
-      const r = db.transaction(RECOVERY_STORE).objectStore(RECOVERY_STORE).get(aid);
-      r.onsuccess = () => res(r.result);
-    })).then(rec => {
-      if (rec) { renderBlocks(rec.snapshot); const st = sstate(aid); st.baseVersion = serverVersion; st.editRevision += 1; saveNow(aid); toast_('已恢复本地副本并重新保存'); }
-      else toast_('未找到本地副本');
-    });
-  };
-  $('#conflict-server').onclick = () => openArticle(aid);
-}
-
-function renderBlocks(blocks) {
-  $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
-    blocks.map(b => {
-      if (b.type === 'heading') return `<h2 class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</h2>`;
-      if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
-      return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
-    }).join('');
-}
-
-function collectBlocks() {
-  return Array.from(document.querySelectorAll('#article .blk.edit')).map((d, i) => ({
-    id: d.dataset.bid, // 稳定 ID（Enter 时已生成 UUID；旧数据保留原 ID）
-    type: d.tagName === 'H2' ? 'heading' : (d.tagName === 'BLOCKQUOTE' ? 'blockquote' : 'paragraph'),
-    text: d.textContent,
-    attrs: {},
-  }));
 }
 
 /* ---------- 新建项目 ---------- */
@@ -626,14 +413,6 @@ function renderInsight(r) {
   }));
 }
 
-/* 安全 URL：只允许 http/https */
-function safeUrl(u) {
-  try {
-    const p = new URL(u, window.location.origin);
-    return (p.protocol === 'http:' || p.protocol === 'https:') ? p.href : '';
-  } catch { return ''; }
-}
-
 /* ========== 搜索链路（真搜索：Wikipedia / DuckDuckGo，降级模型知识） ========== */
 async function runSearch(target) {
   target = target || firstBlock();
@@ -738,7 +517,7 @@ $('#tool-ck').addEventListener('click', () => runCheck(anchorFromSel()));
 /* 关闭/隐藏前 best-effort flush；可靠性由 IndexedDB 恢复副本 + 正常保存保证 */
 window.addEventListener('pagehide', () => {
   if (currentAid) {
-    clearTimeout(saveTimer);
+    cancelPendingSave();
     const st = sstate(currentAid);
     if (st.dirty) saveNow(currentAid);
   }
