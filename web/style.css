@@ -96,6 +96,13 @@ body {
 #article.show { display: block; }
 .art-title { font-size: 30px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; margin-bottom: 8px; }
 .art-meta { font-size: 12px; color: var(--fg-3); margin-bottom: 44px; }
+.save-status { font-size: 11px; color: var(--fg-3); }
+.save-status.saving { color: var(--accent); }
+.save-status.saved { color: #248a3d; }
+.save-status.conflict { color: #d6311f; font-weight: 600; }
+.save-status.offline { color: #c77700; }
+.save-status.recovery-failed { color: #d6311f; }
+.save-status .mini2 { font-size: 10.5px; padding: 2px 8px; margin-left: 4px; }
 .blk { font-size: 16px; line-height: 1.8; color: #333; margin-bottom: 20px; }
 .blk.edit { outline: none; border-radius: 4px; transition: background 0.15s; }
 .blk.edit:hover { background: rgba(0,0,0,0.02); }

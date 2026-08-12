@@ -7,8 +7,6 @@ let projects = [];          // [{id, name}]
 let expanded = {};          // pid -> bool
 let currentAid = null;      // 当前打开草稿 id
 let currentPid = null;
-let saveTimer = null;
-let currentVersion = 1;   // 当前草稿的服务端版本（乐观锁）
 
 function toast_(m) {
   toast.textContent = m;
@@ -97,21 +95,25 @@ function inlineName(placeholder, cb) {
 
 /* ---------- 中间区：Block 编辑器 ---------- */
 function openArticle(aid) {
+  // 切稿前 flush 旧稿：清 timer + 立即保存旧稿（per-aid 状态，不会写错稿）
+  if (currentAid && currentAid !== aid) {
+    clearTimeout(saveTimer);
+    const old = sstate(currentAid);
+    if (old.dirty) saveNow(currentAid);
+  }
   currentAid = aid;
-  // 切稿前清掉旧稿的待保存 timer，防止旧内容写到新稿
-  clearTimeout(saveTimer);
   api(`/api/articles/${aid}`).then(a => {
     currentPid = a.project_id;
-    currentVersion = a.version || 1;
+    sstate(aid).baseVersion = a.version || 1;
     $('#empty').style.display = 'none';
     const art = $('#article');
     art.classList.add('show');
     $('#doc-title').textContent = a.title;
 
     let html = `<div class="art-title">${escapeHtml(a.title)}</div>`;
-    html += `<div class="art-meta">草稿 · 自动保存</div>`;
+    html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span></div>`;
     if (a.blocks.length === 0) {
-      html += `<div class="blk edit empty" contenteditable="true" data-bid="new-1"></div>`;
+      html += `<div class="blk edit empty" contenteditable="true" data-bid="${crypto.randomUUID()}"></div>`;
     } else {
       html += a.blocks.map(b => blockHtml(b)).join('');
     }
@@ -134,36 +136,220 @@ function blockHtml(b) {
   return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</div>`;
 }
 
-function bindEditor() {
-  document.querySelectorAll('#article .blk.edit').forEach(block => {
-    block.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        const next = document.createElement('div');
-        next.className = 'blk edit empty';
-        next.contentEditable = 'true';
-        next.dataset.bid = crypto.randomUUID(); // 创建即稳定 UUID，不再每次生成
-        block.after(next);
-        next.focus();
-        scheduleSave();
-      }
-      if (e.key === 'Backspace' && block.textContent === '' && !e.shiftKey) {
-        const prev = block.previousElementSibling;
-        if (prev && prev.classList.contains('blk.edit')) {
-          e.preventDefault();
-          const prevEl = prev;
-          block.remove();
-          prevEl.focus();
-          scheduleSave();
-        }
-      }
-      scheduleSave();
+/* ========== 保存状态机（每草稿独立状态，防串稿/丢稿） ========== */
+const saveStates = new Map();  // aid -> state
+let saveTimer = null;
+
+function sstate(aid) {
+  if (!saveStates.has(aid)) {
+    saveStates.set(aid, {
+      aid,
+      baseVersion: 1,
+      editRevision: 0,
+      ackedRevision: 0,
+      snapshotHash: '',
+      inFlight: null,        // {aid, revision, hash}
+      pendingAfterSave: false,
+      dirty: false,
+      status: 'clean',       // clean|dirty|saving|saved|conflict|offline|recovery-failed
     });
-    block.addEventListener('input', () => {
-      block.classList.toggle('empty', block.textContent === '');
-      scheduleSave();
-    });
+  }
+  return saveStates.get(aid);
+}
+
+function domHash() {
+  // 当前正文的轻量 hash（用于 ACK 校验快照是否仍是最新）
+  let h = 0;
+  for (const b of document.querySelectorAll('#article .blk.edit')) {
+    for (const ch of b.textContent) h = (h * 31 + ch.codePointAt(0)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
+const SAVE_LABEL = {
+  clean: '', dirty: '未保存', saving: '保存中…', saved: '已保存',
+  conflict: '冲突', offline: '离线待重试', 'recovery-failed': '本地副本未建立',
+};
+
+function setSaveStatus(st, status) {
+  st.status = status;
+  const el = $('#save-status');
+  if (el) {
+    const label = SAVE_LABEL[status] || status;
+    el.textContent = label;
+    el.className = 'save-status ' + status;
+    if (status === 'saved' || status === 'clean') {
+      clearTimeout(setSaveStatus._t);
+      setSaveStatus._t = setTimeout(() => { el.textContent = ''; el.className = 'save-status'; }, 2000);
+    }
+  }
+}
+
+/* ---------- IndexedDB 恢复副本 ---------- */
+const RECOVERY_DB = 'wensu-recovery';
+const RECOVERY_STORE = 'drafts';
+function openRecoveryDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(RECOVERY_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(RECOVERY_STORE, { keyPath: 'article_id' });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
+}
+function writeRecovery(aid, baseVersion, snapshot, editRevision, hash) {
+  return openRecoveryDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(RECOVERY_STORE, 'readwrite');
+    tx.objectStore(RECOVERY_STORE).put({
+      article_id: aid, base_version: baseVersion, snapshot,
+      edit_revision: editRevision, snapshot_hash: hash, queued_at: Date.now(),
+    });
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+function clearRecovery(aid) {
+  return openRecoveryDb().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(RECOVERY_STORE, 'readwrite');
+    tx.objectStore(RECOVERY_STORE).delete(aid);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  }));
+}
+
+/* ---------- 事件委托（Enter 新建块后输入仍触发保存） ---------- */
+function bindEditor() {
+  const art = $('#article');
+  art.addEventListener('keydown', e => {
+    const block = e.target.closest ? e.target.closest('.blk.edit') : null;
+    if (!block) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const next = document.createElement('div');
+      next.className = 'blk edit empty';
+      next.contentEditable = 'true';
+      next.dataset.bid = crypto.randomUUID(); // 创建即稳定 UUID
+      block.after(next);
+      next.focus();
+      markDirty(currentAid);
+    } else if (e.key === 'Backspace' && block.textContent === '' && !e.shiftKey) {
+      const prev = block.previousElementSibling;
+      if (prev && prev.classList.contains('blk.edit')) {
+        e.preventDefault();
+        block.remove();
+        prev.focus();
+        markDirty(currentAid);
+      }
+    }
+  });
+  art.addEventListener('input', e => {
+    const block = e.target.closest ? e.target.closest('.blk.edit') : null;
+    if (block) {
+      block.classList.toggle('empty', block.textContent === '');
+      markDirty(currentAid);
+    }
+  });
+}
+
+function markDirty(aid) {
+  if (!aid) return;
+  const st = sstate(aid);
+  st.dirty = true;
+  st.editRevision += 1;
+  st.snapshotHash = domHash();
+  setSaveStatus(st, 'dirty');
+  scheduleSave(aid);
+}
+
+function scheduleSave(aid) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveNow(aid), 1200);
+}
+
+async function saveNow(aid, reason = 'autosave') {
+  const st = sstate(aid);
+  if (!st.dirty) return;
+  if (st.inFlight) { st.pendingAfterSave = true; return; } // 在途：标记，ACK 后发最新
+  const snapshot = collectBlocks();
+  st.dirty = false;
+  st.inFlight = { aid, revision: st.editRevision, hash: st.snapshotHash };
+  setSaveStatus(st, 'saving');
+  // 先写 IndexedDB 恢复副本（失败/超时不得阻塞保存，但不得谎报"已保存"）
+  let recoveryOk = false;
+  try {
+    await Promise.race([
+      writeRecovery(aid, st.baseVersion, snapshot, st.editRevision, st.snapshotHash),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('IndexedDB 超时')), 800)),
+    ]);
+    recoveryOk = true;
+  } catch {
+    setSaveStatus(st, 'recovery-failed');
+    toast_('本地恢复副本未建立，请勿关闭页面');
+  }
+  try {
+    const resp = await fetch(`/api/articles/${aid}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: snapshot, base_version: st.baseVersion, change_reason: reason }),
+    });
+    if (resp.status === 409) {
+      const d = await resp.json().catch(() => ({}));
+      st.inFlight = null;
+      st.dirty = false;
+      setSaveStatus(st, 'conflict');
+      showConflict(aid, (d.detail && d.detail.current_version) || st.baseVersion);
+      return;
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const d = await resp.json();
+    st.baseVersion = d.version;
+    // 只有 ACK 对应 revision/hash 等于当前，才显示"已保存"
+    if (st.inFlight && st.inFlight.revision === st.editRevision && st.inFlight.hash === st.snapshotHash) {
+      st.ackedRevision = st.editRevision;
+      setSaveStatus(st, recoveryOk ? 'saved' : 'saved');
+      if (!recoveryOk) toast_('已保存，但本地恢复副本未建立');
+    }
+    st.inFlight = null;
+    clearRecovery(aid).catch(() => {});
+    if (st.pendingAfterSave) {
+      st.pendingAfterSave = false;
+      st.dirty = true;
+      scheduleSave(aid);
+    }
+  } catch (e) {
+    st.inFlight = null;
+    st.dirty = true;
+    setSaveStatus(st, 'offline');
+    toast_('保存失败，稍后自动重试：' + e.message);
+    scheduleSave(aid); // 重试最新快照
+  }
+}
+
+/* 409 冲突：本地快照已在 IndexedDB，服务端内容保留，给出恢复动作 */
+function showConflict(aid, serverVersion) {
+  const el = $('#save-status');
+  if (!el) return;
+  el.textContent = '冲突';
+  el.className = 'save-status conflict';
+  el.innerHTML = '冲突 <button class="mini2" id="conflict-local">保留本地</button><button class="mini2" id="conflict-server">用服务器版</button>';
+  $('#conflict-local').onclick = () => {
+    openRecoveryDb().then(db => new Promise(res => {
+      const r = db.transaction(RECOVERY_STORE).objectStore(RECOVERY_STORE).get(aid);
+      r.onsuccess = () => res(r.result);
+    })).then(rec => {
+      if (rec) { renderBlocks(rec.snapshot); const st = sstate(aid); st.baseVersion = serverVersion; st.editRevision += 1; saveNow(aid); toast_('已恢复本地副本并重新保存'); }
+      else toast_('未找到本地副本');
+    });
+  };
+  $('#conflict-server').onclick = () => openArticle(aid);
+}
+
+function renderBlocks(blocks) {
+  $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
+    blocks.map(b => {
+      if (b.type === 'heading') return `<h2 class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</h2>`;
+      if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
+      return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
+    }).join('');
 }
 
 function collectBlocks() {
@@ -173,35 +359,6 @@ function collectBlocks() {
     text: d.textContent,
     attrs: {},
   }));
-}
-
-function scheduleSave() {
-  if (!currentAid) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 1200);
-}
-
-async function saveNow(reason = 'autosave') {
-  if (!currentAid) return;
-  try {
-    const resp = await fetch(`/api/articles/${currentAid}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: collectBlocks(), base_version: currentVersion, change_reason: reason }),
-    });
-    if (resp.status === 409) {
-      const d = await resp.json().catch(() => ({}));
-      toast_('保存冲突：服务器内容已变化，已保留服务器版本');
-      currentVersion = (d.detail && d.detail.current_version) || currentVersion;
-      openArticle(currentAid); // 最小处理：重载服务端（完整双份保留在 v0.3）
-      return;
-    }
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const d = await resp.json();
-    currentVersion = d.version;
-  } catch (e) {
-    toast_('保存失败：' + e.message);
-  }
 }
 
 /* ---------- 新建项目 ---------- */
@@ -358,7 +515,7 @@ async function runRewrite(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
-      saveNow('ai_rewrite');
+      saveNow(currentAid, 'ai_rewrite');
       toast_('已接受，改动已保存');
     };
   } catch (e) {
@@ -504,7 +661,7 @@ async function runCheck(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
-      saveNow('ai_check');
+      saveNow(currentAid, 'ai_check');
       toast_('已按建议修订');
     };
   } catch (e) {
@@ -517,9 +674,13 @@ async function runCheck(target) {
 $('#tool-sr').addEventListener('click', () => runSearch(anchorFromSel()));
 $('#tool-ck').addEventListener('click', () => runCheck(anchorFromSel()));
 
-/* 关闭前保存 */
-window.addEventListener('beforeunload', () => {
-  if (saveTimer) { clearTimeout(saveTimer); saveNow(); }
+/* 关闭/隐藏前 best-effort flush；可靠性由 IndexedDB 恢复副本 + 正常保存保证 */
+window.addEventListener('pagehide', () => {
+  if (currentAid) {
+    clearTimeout(saveTimer);
+    const st = sstate(currentAid);
+    if (st.dirty) saveNow(currentAid);
+  }
 });
 
 loadProjects();
