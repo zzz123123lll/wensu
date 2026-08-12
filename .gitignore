@@ -21,3 +21,7 @@ node_modules/
 .DS_Store
 dist/
 build/
+
+# Hermes 工作文件
+.gstack/
+.hermes/
