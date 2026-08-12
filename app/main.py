@@ -71,7 +71,14 @@ class AskIn(BaseModel):
     context: str = ""
 
 
-class RewriteIn(BaseModel):
+class AnchorMixin(BaseModel):
+    """工具请求的可选锚点：结果应就近呈现，不靠"当前光标"猜位置。"""
+    article_id: int | None = None
+    target_block_id: str | None = None
+    selection: dict | None = None  # {text, start_utf16, end_utf16}
+
+
+class RewriteIn(AnchorMixin):
     text: str
 
 
@@ -80,17 +87,26 @@ class InsightIn(BaseModel):
     blocks: list = []
 
 
-class SearchIn(BaseModel):
+class SearchIn(AnchorMixin):
     query: str
 
 
-class CheckIn(BaseModel):
+class CheckIn(AnchorMixin):
     claim: str
 
 
 def _ai_error(e: LLMError) -> HTTPException:
     status = 400 if e.kind == "config" else 502
     return HTTPException(status, str(e))
+
+
+def _anchor(body) -> dict:
+    """响应原样回显稳定锚点：前端据此就近呈现，不靠"当前光标"猜位置。"""
+    return {
+        "article_id": body.article_id,
+        "target_block_id": body.target_block_id,
+        "selection": body.selection,
+    }
 
 
 def _conn():
@@ -226,7 +242,7 @@ def api_ai_ask(body: AskIn):
 def api_ai_rewrite(body: RewriteIn):
     conn = _conn()
     try:
-        return {"candidates": ai_service.rewrite(conn, body.text)}
+        return {"candidates": ai_service.rewrite(conn, body.text), "anchor": _anchor(body)}
     except LLMError as e:
         raise _ai_error(e)
     finally:
@@ -251,7 +267,7 @@ def api_ai_search(body: SearchIn):
         raise HTTPException(400, "查询内容不能为空")
     conn = _conn()
     try:
-        return {"results": ai_service.search(conn, query)}
+        return {"results": ai_service.search(conn, query), "anchor": _anchor(body)}
     except LLMError as e:
         raise _ai_error(e)
     finally:
@@ -265,7 +281,7 @@ def api_ai_check(body: CheckIn):
         raise HTTPException(400, "核验内容不能为空")
     conn = _conn()
     try:
-        return ai_service.check(conn, claim)
+        return {**ai_service.check(conn, claim), "anchor": _anchor(body)}
     except LLMError as e:
         raise _ai_error(e)
     finally:

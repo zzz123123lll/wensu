@@ -80,3 +80,45 @@ def test_check_empty_claim_400(tmp_path):
     c = _client(tmp_path)
     r = c.post("/api/ai/check", json={"claim": ""})
     assert r.status_code == 400
+
+
+# ---------- 锚点回显 ----------
+
+def test_rewrite_echoes_anchor(tmp_path, monkeypatch):
+    c = _client(tmp_path)
+    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t: [{"label": "方案一", "text": "改"}])
+    sel = {"text": "选中文字", "start_utf16": 3, "end_utf16": 7}
+    r = c.post("/api/ai/rewrite", json={
+        "text": "原文", "article_id": 7, "target_block_id": "b1", "selection": sel,
+    })
+    assert r.status_code == 200
+    a = r.json()["anchor"]
+    assert a["article_id"] == 7
+    assert a["target_block_id"] == "b1"
+    assert a["selection"] == sel
+
+
+def test_search_echoes_anchor(tmp_path, monkeypatch):
+    c = _client(tmp_path)
+    monkeypatch.setattr(ai_service, "search", lambda conn, q: [])
+    sel = {"text": "x", "start_utf16": 0, "end_utf16": 1}
+    r = c.post("/api/ai/search", json={"query": "q", "article_id": 3, "selection": sel})
+    assert r.status_code == 200
+    assert r.json()["anchor"]["selection"] == sel
+    assert r.json()["anchor"]["article_id"] == 3
+
+
+def test_check_echoes_anchor(tmp_path, monkeypatch):
+    c = _client(tmp_path)
+    monkeypatch.setattr(ai_service, "check", lambda conn, claim: {"status": "ok", "reason": "r", "suggestion": ""})
+    r = c.post("/api/ai/check", json={"claim": "c", "target_block_id": "b9"})
+    assert r.status_code == 200
+    assert r.json()["anchor"]["target_block_id"] == "b9"
+
+
+def test_anchor_optional_no_anchor_in_response(tmp_path, monkeypatch):
+    c = _client(tmp_path)
+    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t: [{"label": "方案一", "text": "改"}])
+    r = c.post("/api/ai/rewrite", json={"text": "原文"})
+    assert r.status_code == 200
+    assert r.json()["anchor"]["article_id"] is None

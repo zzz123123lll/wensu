@@ -306,18 +306,44 @@ function firstBlock() {
   return document.querySelector('#article .blk.edit');
 }
 
+/* 精确选区：捕获选中文本 + UTF-16 偏移（相对目标 Block） */
+function captureSelection(block) {
+  const s = window.getSelection();
+  if (!s.rangeCount) return null;
+  const r = s.getRangeAt(0);
+  const text = r.toString();
+  if (!text || !block.contains(r.startContainer)) return null;
+  const pre = document.createRange();
+  pre.selectNodeContents(block);
+  pre.setEnd(r.startContainer, r.startOffset);
+  return { text, start_utf16: pre.toString().length, end_utf16: pre.toString().length + text.length };
+}
+
+/* 工具请求统一锚点（问题发生在哪里，结果就近呈现） */
+function anchorFor(target, selection) {
+  return {
+    article_id: currentAid,
+    target_block_id: target.dataset.bid || null,
+    selection: selection || null,
+  };
+}
+
 async function runRewrite(target) {
   if (!requireCfg()) return;
   target = target || firstBlock();
   if (!target) { toast_('先写点什么再改写'); return; }
-  const text = target.textContent.trim();
+  const sel = captureSelection(target); // 精确选中文字（无选中则整段）
+  const text = (sel ? sel.text : target.textContent.trim());
   if (!text) { toast_('这一段还是空的'); return; }
   const card = document.createElement('div');
   card.className = 'ai-card';
   card.innerHTML = '<div class="ai-head">正在改写…</div>';
   target.after(card);
   try {
-    const r = await api('/api/ai/rewrite', { method: 'POST', body: JSON.stringify({ text: text.slice(0, 2000) }) });
+    const r = await api('/api/ai/rewrite', {
+      method: 'POST',
+      body: JSON.stringify({ text: text.slice(0, 2000), ...anchorFor(target, sel) }),
+    });
     card.innerHTML = '<div class="ai-head">改写候选</div>'
       + r.candidates.map(c => `<div class="opt"><span class="tag">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</div>`).join('')
       + '<div class="acts"><button class="btn btn-g" data-x="rej">拒绝</button><button class="btn btn-p" data-x="acc">接受方案一</button></div>';
@@ -417,7 +443,8 @@ function renderInsight(r) {
 async function runSearch(target) {
   target = target || firstBlock();
   if (!target) { toast_('先写点什么再搜索'); return; }
-  const q = target.textContent.trim().slice(0, 200);
+  const sel = captureSelection(target); // 精确选中文字（无选中则整段）
+  const q = (sel ? sel.text : target.textContent.trim()).slice(0, 200);
   if (!q) { toast_('这一段还是空的'); return; }
   const card = document.createElement('div');
   card.className = 'ai-card';
@@ -429,7 +456,7 @@ async function runSearch(target) {
     const resp = await fetch('/api/ai/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, ...anchorFor(target, sel) }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -466,7 +493,8 @@ async function runCheck(target) {
   if (!requireCfg()) return;
   target = target || firstBlock();
   if (!target) { toast_('先选中要核验的内容'); return; }
-  const claim = target.textContent.trim().slice(0, 500);
+  const sel = captureSelection(target); // 精确选中文字（无选中则整段）
+  const claim = (sel ? sel.text : target.textContent.trim()).slice(0, 500);
   if (!claim) { toast_('内容为空'); return; }
   const card = document.createElement('div');
   card.className = 'ai-card';
@@ -478,7 +506,7 @@ async function runCheck(target) {
     const resp = await fetch('/api/ai/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ claim }),
+      body: JSON.stringify({ claim, ...anchorFor(target, sel) }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
