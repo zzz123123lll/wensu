@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from app import db
+from app import db, safe_fetch
 from app.llm import LLMClient, LLMError
 from app.settings import get_api_key, get_settings
 
@@ -288,23 +288,80 @@ def _ddg_search(query: str) -> list[dict]:
         return []
 
 
-def check(conn, claim: str) -> dict:
-    """事实核验：LLM 三态判断（可信 / 存疑 / 建议修改）。"""
+def check(conn, claim: str, with_evidence: bool = True) -> dict:
+    """证据型核验：先抓取相关来源做证据（失败则 LLM 无证据判断），结论绑定证据快照。
+
+    无证据时如实返回"待核实"（doubt），不虚构可信度。
+    """
     client = _require_client(conn)
+    evidence = []
+    if with_evidence:
+        evidence = _gather_evidence(conn, claim)
+    system = (
+        "你是事实核查员。判断用户给出的陈述是否可信。"
+        "只返回 JSON，格式："
+        '{"status": "ok|doubt|fix", "reason": "一句话理由", "suggestion": "若 status=fix 给出可替代的稳妥表述，否则空字符串"}。'
+        "status 含义：ok=有把握可信；doubt=无法证实或信息不足；fix=明显不准确或夸大，需要修改。"
+    )
+    if evidence:
+        system += (
+            "\n以下是抓取到的参考资料（逐条以 [1][2]... 标注），你必须基于这些资料判断，"
+            "并在 reason 里引用对应编号：\n" + "\n".join(
+                f"[{i + 1}] {e['title'] or e['url']}：{e['excerpt'][:300]}" for i, e in enumerate(evidence)
+            )
+        )
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是事实核查员。判断用户给出的陈述是否可信。"
-                "只返回 JSON，格式："
-                '{"status": "ok|doubt|fix", "reason": "一句话理由", "suggestion": "若 status=fix 给出可替代的稳妥表述，否则空字符串"}。'
-                "status 含义：ok=有把握可信；doubt=无法证实或信息不足；fix=明显不准确或夸大，需要修改。"
-            ),
-        },
+        {"role": "system", "content": system},
         {"role": "user", "content": claim},
     ]
     raw = client.chat(messages, json_mode=True)
-    return _parse_check(raw)
+    out = _parse_check(raw)
+    out["evidence"] = evidence
+    return out
+
+
+def _gather_evidence(conn, claim: str, max_items: int = 2) -> list[dict]:
+    """搜索相关来源并安全抓取，落 evidence_snapshots；失败/不可达如实留空。"""
+    out = []
+    try:
+        results = search(conn, claim)
+    except Exception:
+        return out
+    fetched = 0
+    for r in results:
+        if fetched >= max_items:
+            break
+        url = r.get("url") or ""
+        if not url:
+            continue
+        try:
+            snap = safe_fetch.fetch_url(url)
+        except Exception:
+            continue  # 抓取失败：不是证据
+        try:
+            pid = _project_of(conn)
+            sid = db.create_source(conn, pid, url,
+                                   title=snap["excerpt"][:80], snippet=snap["excerpt"][:500],
+                                   provider=r.get("source", "model"))
+            eid = db.create_evidence_snapshot(conn, sid, snap["requested_url"], snap["final_url"],
+                                              snap["mime"], snap["content_hash"], snap["excerpt"])
+        except Exception:
+            continue
+        out.append({"evidence_id": eid, "title": snap["excerpt"][:60] or url,
+                    "url": snap["final_url"] or url, "excerpt": snap["excerpt"]})
+        fetched += 1
+    return out
+
+
+def _project_of(conn) -> int:
+    """当前默认项目（证据归属）：最新一个项目；无则建。"""
+    try:
+        rows = db.list_projects(conn)
+        if rows:
+            return rows[0]["id"]
+        return db.create_project(conn, "默认项目")
+    except Exception:
+        return 1
 
 
 def _parse_check(raw: str) -> dict:

@@ -599,9 +599,15 @@ async function runCheck(target) {
     const r = await resp.json();
     const label = { ok: '可信', doubt: '存疑', fix: '建议修改' }[r.status] || '存疑';
     const cls = r.status === 'ok' ? 'ok' : r.status === 'fix' ? 'fix' : 'doubt';
+    const evs = (r.evidence || []);
+    const evHtml = evs.length
+      ? '<div class="ev-head">证据（抓取自' + (evs.length === 1 ? '' : ' ' + evs.length + ' 个') + '来源）</div>' +
+        evs.map(e => `<div class="ev"><a href="${escapeHtml(safeUrl(e.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(e.title || e.url)}</a></div>`).join('')
+      : '<div class="ev-head">证据</div><div class="ev none">未能抓取到可核验来源——当前判断基于模型知识，建议手动查证</div>';
     card.innerHTML = `<div class="ai-head">事实核验</div>
       <div class="vc ${cls}"><span class="l">${label}</span><span class="r">${escapeHtml(r.reason)}</span></div>
       ${r.suggestion ? `<div class="opt"><span class="tag">建议改为</span>${escapeHtml(r.suggestion)}</div>` : ''}
+      ${evHtml}
       <div class="acts">${r.suggestion
         ? '<button class="btn btn-g" data-x="rej">忽略</button><button class="btn btn-p" data-x="acc">采用建议</button>'
         : '<button class="btn btn-g" data-x="rej">知道了</button>'}</div>`;

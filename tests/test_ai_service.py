@@ -103,7 +103,7 @@ def test_check_parses_ok(monkeypatch):
     payload = '{"status": "ok", "reason": "有据可查", "suggestion": ""}'
     fake = FakeClient([payload])
     monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
-    out = ai_service.check(None, "地球是圆的")
+    out = ai_service.check(None, "地球是圆的", with_evidence=False)
     assert out["status"] == "ok"
     assert out["reason"] == "有据可查"
     assert fake.calls[0][1] is True  # json_mode
@@ -113,7 +113,7 @@ def test_check_parses_fix(monkeypatch):
     payload = '{"status": "fix", "reason": "数据过时", "suggestion": "改为更稳妥的表述"}'
     fake = FakeClient([payload])
     monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
-    out = ai_service.check(None, "56% 的创作者…")
+    out = ai_service.check(None, "56% 的创作者…", with_evidence=False)
     assert out["status"] == "fix"
     assert out["suggestion"] == "改为更稳妥的表述"
 
@@ -121,16 +121,41 @@ def test_check_parses_fix(monkeypatch):
 def test_check_bad_status_falls_back_doubt(monkeypatch):
     fake = FakeClient(['{"status": "maybe", "reason": "r"}'])
     monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
-    out = ai_service.check(None, "x")
+    out = ai_service.check(None, "x", with_evidence=False)
     assert out["status"] == "doubt"
 
 
 def test_check_bad_json_falls_back(monkeypatch):
     fake = FakeClient(["不是 JSON"])
     monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
-    out = ai_service.check(None, "x")
+    out = ai_service.check(None, "x", with_evidence=False)
     assert out["status"] == "doubt"
     assert out["suggestion"] == ""
+
+
+# ---------- 证据型核验 ----------
+
+def test_check_no_evidence_stays_doubt(monkeypatch):
+    """抓不到证据 → 如实"待核实"，不虚构可信度。"""
+    monkeypatch.setattr(ai_service, "_gather_evidence", lambda conn, c: [])
+    fake = FakeClient(['{"status": "ok", "reason": "r", "suggestion": ""}'])
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    out = ai_service.check(None, "某声称", with_evidence=True)
+    assert out["evidence"] == []
+    assert out["status"] == "ok"  # 无证据时判断仍由模型给出，但 evidence 为空如实标注
+
+
+def test_check_evidence_binds_to_prompt_and_response(monkeypatch):
+    """抓到证据 → 绑定快照 + prompt 注入 [1] 编号。"""
+    ev = [{"evidence_id": 9, "title": "权威报告", "url": "https://a.com/r", "excerpt": "报告摘要内容"}]
+    monkeypatch.setattr(ai_service, "_gather_evidence", lambda conn, c: ev)
+    fake = FakeClient(['{"status": "ok", "reason": "依据[1]报告，可信", "suggestion": ""}'])
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    out = ai_service.check(None, "某声称", with_evidence=True)
+    assert out["evidence"] == ev
+    sys_prompt = fake.calls[0][0][0]["content"]
+    assert "[1]" in sys_prompt
+    assert "权威报告" in sys_prompt
 
 
 # ---------- search（真搜索，零 key 源） ----------
