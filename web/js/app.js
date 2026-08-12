@@ -965,5 +965,8 @@ mask.addEventListener('click', closeDrawer);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 window.addEventListener('resize', () => { if (window.innerWidth >= 1100) closeDrawer(); });
 
+/* 启动时获取随机 session token（HttpOnly cookie，后续写请求自动携带） */
+fetch('/api/session').catch(() => {});
+
 loadProjects();
 loadSettings();

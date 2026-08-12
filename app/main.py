@@ -15,34 +15,90 @@ from app.schemas import Block
 # 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
-app = FastAPI(title="文序", version="0.1.0")
+import secrets
+from datetime import datetime, timezone
+
+app = FastAPI(title="文序", version="0.2.0")
 
 # 本机绑定服务：只允许本地源（防恶意网页跨源调用本机 API）
 ALLOWED_ORIGINS = {"http://localhost:8766", "http://127.0.0.1:8766"}
 ALLOWED_HOSTS = {"127.0.0.1:8766", "localhost:8766"}
 
+# Phase 8：随机本地 session token（HttpOnly cookie，纵深防御；Origin 校验为主防线）
+SESSION_TOKEN = secrets.token_urlsafe(32)
+_err_count = 0
+
 
 @app.middleware("http")
 async def security_guard(request, call_next):
-    # Host 校验（防 DNS rebinding / 伪造 Host）
+    global _err_count
+    # Host 校验（防 DNS rebinding / 跨源直连）
     host = request.headers.get("host", "")
     if host not in ALLOWED_HOSTS:
+        _err_count += 1
         return JSONResponse({"detail": "invalid host"}, status_code=403)
-    # 写请求与 AI API：Origin 校验（无 Origin 的同源/非浏览器请求放行）
+    # 写请求 + AI API：Origin 校验（防恶意网页跨源调用本机服务）
     if request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/"):
         origin = request.headers.get("origin")
         if origin and origin not in ALLOWED_ORIGINS:
+            _err_count += 1
             return JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
-    return await call_next(request)
+        # session token 纵深防御：带了 token 就必须匹配（HttpOnly cookie 无法被恶意网页伪造）
+        cookie_token = request.cookies.get("wensu_session")
+        header_token = request.headers.get("x-wensu-token")
+        if cookie_token is not None and cookie_token != SESSION_TOKEN:
+            _err_count += 1
+            return JSONResponse({"detail": "invalid session"}, status_code=403)
+        if header_token is not None and header_token != SESSION_TOKEN:
+            _err_count += 1
+            return JSONResponse({"detail": "invalid session"}, status_code=403)
+    try:
+        return await call_next(request)
+    except Exception:
+        _err_count += 1
+        raise
 
 
-# 原型阶段允许跨源（prototype 独立端口调试用；上线前收紧）
+# CORS：仅允许本地源（同源为主，跨端口调试为辅）；禁止 *
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/session")
+def api_session():
+    """下发随机本地 session token（HttpOnly cookie，防同机恶意网页）。"""
+    resp = JSONResponse({"ok": True, "expires": "session"})
+    resp.set_cookie("wensu_session", SESSION_TOKEN, httponly=True, samesite="strict", path="/")
+    return resp
+
+
+@app.get("/api/diagnostics")
+def api_diagnostics():
+    """诊断包（不含正文/Key/prompt）：版本、DB 大小、表计数、错误计数。"""
+    conn = _conn()
+    try:
+        counts = {}
+        for t in ("projects", "articles", "article_revisions", "sources", "citations", "materials", "article_asks", "author_prefs", "model_profiles"):
+            try:
+                counts[t] = conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"]
+            except Exception:
+                counts[t] = 0
+        size = os.path.getsize(db.DB_PATH) if os.path.exists(db.DB_PATH) else 0
+        return {
+            "version": app.version,
+            "db_size_bytes": size,
+            "db_ok": True,
+            "tables": counts,
+            "security_errors": _err_count,
+        }
+    except Exception:
+        return JSONResponse({"version": app.version, "db_ok": False, "security_errors": _err_count}, status_code=200)
+    finally:
+        conn.close()
 
 
 class ProjectIn(BaseModel):
