@@ -38,6 +38,7 @@ test('IME 候选确认 Enter 不拆块', async ({ page }) => {
 
 test('危险 HTML 粘贴只保留纯文本', async ({ page }) => {
   await openArticle(page);
+  await page.locator('.blk.edit').first().click(); // 真实聚焦（execCommand 需要焦点）
   await page.evaluate(() => {
     const art = document.getElementById('article');
     const dt = new DataTransfer();
