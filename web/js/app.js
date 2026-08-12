@@ -503,7 +503,7 @@ async function runSearch(target) {
     const resp = await fetch('/api/ai/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, ...anchorFor(target, sel) }),
+      body: JSON.stringify({ query: q, ...anchorFor(target, sel), stream: true }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -511,8 +511,27 @@ async function runSearch(target) {
       const e = await resp.json().catch(() => ({}));
       throw new Error(e.detail || ('HTTP ' + resp.status));
     }
-    const r = await resp.json();
-    const results = r.results || [];
+    // NDJSON 流式：stage → result，渐进渲染
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let results = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.type === 'stage' && ev.stage === 'fetching') {
+          card.innerHTML = '<div class="ai-head">搜索中…</div><div class="opt">正在联网检索（外网受限时自动改用模型知识）…</div>';
+        }
+        if (ev.type === 'result') results = ev.results || [];
+      }
+    }
     if (!results.length) { card.innerHTML = '<div class="ai-head">没有找到相关资料</div>'; return; }
     card.innerHTML = '<div class="ai-head">搜索结果 · ' + results.length + ' 条</div>' +
       results.map((res, i) => `<div class="res">

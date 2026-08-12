@@ -6,9 +6,13 @@ prompt 构造 + 输出解析 + 降级链。LLM 客户端从设置读取（用户
 
 import json
 import re
+import threading
+import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
+from app import db
 from app.llm import LLMClient, LLMError
 from app.settings import get_api_key, get_settings
 
@@ -117,20 +121,82 @@ def _parse_insight(raw: str) -> dict:
         return default
 
 
-def search(conn, query: str) -> list[dict]:
-    """搜索：中文 Wikipedia → DuckDuckGo 真检索；源不可达时降级为 LLM 知识线索。
+# 搜索结果缓存：同 query 24h 内秒回（内存 LRU 简化版）
+_SEARCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_SEARCH_CACHE_TTL = 24 * 3600
+_SEARCH_CACHE_MAX = 200
+_cache_lock = threading.Lock()
 
-    每条结果带 source 字段：web=实时检索 / model=模型知识（建议核实）。
-    """
-    results = _wikipedia_search(query)
-    if not results:
-        results = _ddg_search(query)
-    if results:
-        return results[:5]
+
+def search(conn, query: str) -> list[dict]:
+    """搜索：web 检索（Wikipedia → DuckDuckGo）与模型知识**并发**，先到先胜；
+    结果缓存 24h。"""
+    with _cache_lock:
+        hit = _SEARCH_CACHE.get(query)
+        if hit and time.time() - hit[0] < _SEARCH_CACHE_TTL:
+            return hit[1]
+
+    results: dict[str, list[dict]] = {"web": [], "model": []}
+
+    def do_web():
+        r = _wikipedia_search(query)
+        if not r:
+            r = _ddg_search(query)
+        results["web"] = r
+
+    def do_model():
+        c2 = None
+        try:
+            c2 = db.connect()  # 线程内独立连接（sqlite 连接不可跨线程）
+            db.init(c2)
+            results["model"] = _model_search(c2, query)
+        except Exception:
+            results["model"] = []
+        finally:
+            if c2 is not None:
+                try:
+                    c2.close()
+                except Exception:
+                    pass
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fw = ex.submit(do_web)
+        fm = ex.submit(do_model)
+        fw.result(timeout=12)
+        try:
+            fm.result(timeout=60)
+        except Exception:
+            pass
+
+    out = (results["web"] or results["model"])[:5]
+    with _cache_lock:
+        _SEARCH_CACHE[query] = (time.time(), out)
+        if len(_SEARCH_CACHE) > _SEARCH_CACHE_MAX:
+            for k in list(_SEARCH_CACHE)[: len(_SEARCH_CACHE) - _SEARCH_CACHE_MAX]:
+                _SEARCH_CACHE.pop(k, None)
+    return out
+
+
+def search_stream(conn, query: str):
+    """NDJSON 流式搜索：先发 stage 事件，再发 result 事件（供前端渐进渲染）。"""
     try:
-        return _model_search(conn, query)[:5]
-    except LLMError:
-        return []
+        with _cache_lock:
+            hit = _SEARCH_CACHE.get(query)
+            if hit and time.time() - hit[0] < _SEARCH_CACHE_TTL:
+                yield json.dumps({"type": "stage", "stage": "cached"}, ensure_ascii=False) + "\n"
+                yield json.dumps({"type": "result", "results": hit[1]}, ensure_ascii=False) + "\n"
+                return
+
+        yield json.dumps({"type": "stage", "stage": "fetching"}, ensure_ascii=False) + "\n"
+        results = search(conn, query)
+        yield json.dumps({"type": "stage", "stage": "done"}, ensure_ascii=False) + "\n"
+        yield json.dumps({"type": "result", "results": results}, ensure_ascii=False) + "\n"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _model_search(conn, query: str) -> list[dict]:

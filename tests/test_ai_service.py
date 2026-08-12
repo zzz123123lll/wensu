@@ -1,9 +1,20 @@
 """ai_service 测试：mock LLM 客户端，验证 prompt 构造 / 输出解析 / 降级。"""
 
+import json
+import time
+
 import pytest
 
 from app import ai_service
 from app.llm import LLMError
+
+
+@pytest.fixture(autouse=True)
+def _clear_search_cache():
+    """search 结果缓存：每测试清空，避免同 query 串结果。"""
+    ai_service._SEARCH_CACHE.clear()
+    yield
+    ai_service._SEARCH_CACHE.clear()
 
 
 class FakeClient:
@@ -175,3 +186,23 @@ def test_search_caps_at_five(monkeypatch):
     monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: many)
     out = ai_service.search(None, "q")
     assert len(out) == 5
+
+
+# ---------- NDJSON 流式 ----------
+
+def test_search_stream_events_order(monkeypatch):
+    w = [{"title": "维基", "url": "u", "snippet": "s"}]
+    monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: w)
+    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [])
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn: FakeClient(["[]"]))
+    events = [json.loads(line) for line in ai_service.search_stream(None, "q_stream")]
+    types = [e["type"] for e in events]
+    assert types == ["stage", "stage", "result"]
+    assert events[-1]["results"][0]["title"] == "维基"
+
+
+def test_search_stream_cached_hit(monkeypatch):
+    ai_service._SEARCH_CACHE["q_cached"] = (time.time(), [{"title": "缓存", "url": "", "snippet": ""}])
+    events = [json.loads(line) for line in ai_service.search_stream(None, "q_cached")]
+    assert events[0]["stage"] == "cached"
+    assert events[1]["results"][0]["title"] == "缓存"

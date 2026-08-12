@@ -4,7 +4,7 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -89,6 +89,7 @@ class InsightIn(BaseModel):
 
 class SearchIn(AnchorMixin):
     query: str
+    stream: bool = False
 
 
 class CheckIn(AnchorMixin):
@@ -290,6 +291,13 @@ def api_ai_search(body: SearchIn):
     query = body.query.strip()
     if not query:
         raise HTTPException(400, "查询内容不能为空")
+    if body.stream:
+        # NDJSON 流式：stage → result 渐进渲染
+        conn = _conn()
+        return StreamingResponse(
+            ai_service.search_stream(conn, query),
+            media_type="application/x-ndjson",
+        )
     conn = _conn()
     try:
         return {"results": ai_service.search(conn, query), "anchor": _anchor(body)}

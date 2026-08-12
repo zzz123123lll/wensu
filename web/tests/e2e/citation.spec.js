@@ -17,13 +17,15 @@ test('引用落库 + badge 渲染 + 素材存入', async ({ page }) => {
   await page.route('**/api/projects/1/articles', r => r.fulfill({ json: [{ id: 7, title: '引用测试', updated_at: '' }] }));
   await page.route('**/api/articles/7', r => r.fulfill({ json: ARTICLE }));
   await page.route('**/api/settings', r => r.fulfill({ json: { configured: true, base_url: 'https://x', model: 'm', has_key: true } }));
-  await page.route('**/api/ai/search', r => r.fulfill({ json: {
-    results: [
-      { title: '来源一', url: 'https://a.com', snippet: '摘要一', source: 'model' },
-      { title: '来源二', url: 'https://b.com', snippet: '摘要二', source: 'web' },
-    ],
-    anchor: null,
-  } }));
+  await page.route('**/api/ai/search', r => r.fulfill({
+    status: 200,
+    contentType: 'application/x-ndjson',
+    body: JSON.stringify({ type: 'stage', stage: 'fetching' }) + '\n'
+      + JSON.stringify({ type: 'result', results: [
+        { title: '来源一', url: 'https://a.com', snippet: '摘要一', source: 'model' },
+        { title: '来源二', url: 'https://b.com', snippet: '摘要二', source: 'web' },
+      ] }) + '\n',
+  }));
   await page.route('**/api/projects/1/sources', async r => {
     const body = r.request().postDataJSON();
     const id = sources.length + 1;
