@@ -258,3 +258,32 @@ mark.ins.fade { background: transparent; }
 .modal-status { font-size: 11px; color: var(--green, #34c759); margin-top: 8px; }
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+
+/* ========== 响应式：窄屏抽屉布局（桌面三栏不变） ========== */
+.drawer-btn { display: none; }
+
+@media (max-width: 1099px) {
+  .drawer-btn { display: flex; }
+  #sidebar, #tools {
+    position: fixed; top: 0; bottom: 0; z-index: 50;
+    transition: transform 0.25s ease;
+    box-shadow: 0 0 24px rgba(0,0,0,0.12);
+  }
+  #sidebar { left: 0; width: 280px; transform: translateX(-105%); }
+  #tools { right: 0; width: 300px; transform: translateX(105%); }
+  body.drawer-proj #sidebar { transform: translateX(0); }
+  body.drawer-helper #tools { transform: translateX(0); }
+  #drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 40; }
+  body.drawer-open { overflow: hidden; }
+}
+
+@media (max-width: 767px) {
+  #main { flex-direction: column; }
+  #doc { width: 100%; }
+  .blk { font-size: 15px; line-height: 1.75; }
+  .art-title { font-size: 24px; }
+}
+
+@media (min-width: 1100px) {
+  #drawer-mask { display: none !important; }
+}

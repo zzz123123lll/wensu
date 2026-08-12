@@ -77,6 +77,7 @@ function inlineName(placeholder, cb) {
 /* ---------- 中间区：Block 编辑器 ---------- */
 function openArticle(aid) {
   const seq = ++articleReqSeq;
+  if (drawerOpen === 'proj') closeDrawer(); // 选择草稿后自动关项目抽屉
   // 切稿前 flush 旧稿：清 timer + 立即保存旧稿（per-aid 状态，不会写错稿）
   if (currentAid && currentAid !== aid) {
     cancelPendingSave();
@@ -550,6 +551,32 @@ window.addEventListener('pagehide', () => {
     if (st.dirty) saveNow(currentAid);
   }
 });
+
+/* ========== 窄屏抽屉（互斥：项目 / 助手） ========== */
+const mask = $('#drawer-mask');
+let drawerOpen = null; // 'proj' | 'helper' | null
+
+function openDrawer(which) {
+  if (drawerOpen === which) { closeDrawer(); return; }
+  closeDrawer();
+  drawerOpen = which;
+  document.body.classList.add('drawer-' + which, 'drawer-open');
+  mask.style.display = 'block';
+  const target = which === 'proj' ? $('#btn-drawer-proj') : $('#btn-drawer-helper');
+  if (target) target.focus();
+}
+
+function closeDrawer() {
+  document.body.classList.remove('drawer-proj', 'drawer-helper', 'drawer-open');
+  mask.style.display = 'none';
+  drawerOpen = null;
+}
+
+$('#btn-drawer-proj').addEventListener('click', () => openDrawer('proj'));
+$('#btn-drawer-helper').addEventListener('click', () => openDrawer('helper'));
+mask.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+window.addEventListener('resize', () => { if (window.innerWidth >= 1100) closeDrawer(); });
 
 loadProjects();
 loadSettings();
