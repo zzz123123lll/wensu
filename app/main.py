@@ -1,5 +1,7 @@
 """文序 · 后端 API（第一阶段：项目/草稿/正文块 CRUD）。"""
 
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,6 +9,9 @@ from pydantic import BaseModel
 
 from app import ai_service, db, settings
 from app.llm import LLMError
+
+# 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
+WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
 app = FastAPI(title="文序", version="0.1.0")
 
@@ -221,5 +226,17 @@ def api_ai_check(body: CheckIn):
         conn.close()
 
 
-# 静态前端（必须最后挂载）
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
+@app.get("/api/health")
+def api_health():
+    try:
+        conn = db.connect()
+        db.init(conn)
+        conn.close()
+        db_ok = "ok"
+    except Exception:
+        db_ok = "error"
+    return {"status": "ok", "version": "0.1.0", "db": db_ok}
+
+
+# 静态前端（必须最后挂载；基于文件位置，任意 CWD 可用）
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

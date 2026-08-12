@@ -18,5 +18,8 @@ dev = [
 [project.scripts]
 wensu = "app.cli:main"
 
+[tool.setuptools]
+packages = ["app"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
