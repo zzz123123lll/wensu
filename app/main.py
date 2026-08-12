@@ -4,11 +4,11 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import ai_service, db, safe_fetch, settings
+from app import ai_service, blocks, db, safe_fetch, settings
 from app.llm import LLMError
 from app.schemas import Block
 
@@ -426,6 +426,86 @@ def api_fetch(pid: int, body: FetchIn):
         eid = db.create_evidence_snapshot(conn, sid, snap["requested_url"], snap["final_url"],
                                           snap["mime"], snap["content_hash"], snap["excerpt"])
         return {"evidence_id": eid, "source_id": sid, **snap}
+    finally:
+        conn.close()
+
+
+# ---------- 回收站 / 历史 / 导出（v4） ----------
+
+@app.delete("/api/articles/{aid}")
+def api_delete_article(aid: int):
+    conn = _conn()
+    try:
+        if not db.soft_delete_article(conn, aid):
+            raise HTTPException(404, "草稿不存在或已在回收站")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/articles/{aid}/restore")
+def api_restore_article(aid: int):
+    conn = _conn()
+    try:
+        if not db.restore_article(conn, aid):
+            raise HTTPException(404, "草稿不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/projects/{pid}/trash")
+def api_list_trash(pid: int):
+    conn = _conn()
+    try:
+        return {"trash": db.list_trash(conn, pid)}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/projects/{pid}")
+def api_delete_project(pid: int):
+    conn = _conn()
+    try:
+        if not db.soft_delete_project(conn, pid):
+            raise HTTPException(404, "项目不存在或已在回收站")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/articles/{aid}/revisions")
+def api_list_revisions(aid: int):
+    conn = _conn()
+    try:
+        return {"revisions": db.list_revisions(conn, aid)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/articles/{aid}/revisions/{version}/restore")
+def api_restore_revision(aid: int, version: int):
+    conn = _conn()
+    try:
+        try:
+            new_version = db.restore_revision(conn, aid, version)
+        except db.NotFoundError as e:
+            raise HTTPException(404, str(e))
+        return {"ok": True, "version": new_version}
+    finally:
+        conn.close()
+
+
+@app.get("/api/articles/{aid}/export")
+def api_export_article(aid: int):
+    conn = _conn()
+    try:
+        art = db.get_article(conn, aid)
+        if art is None:
+            raise HTTPException(404, "草稿不存在")
+        md = f"# {art['title']}\n\n" + blocks.serialize_blocks(art["blocks"])
+        return PlainTextResponse(md, media_type="text/markdown; charset=utf-8",
+                                 headers={"Content-Disposition": f'attachment; filename="article-{aid}.md"'})
     finally:
         conn.close()
 

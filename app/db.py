@@ -116,6 +116,11 @@ MIGRATIONS: list[list[str]] = [
         "CREATE INDEX IF NOT EXISTS idx_citations_article ON citations(article_id)",
         "CREATE INDEX IF NOT EXISTS idx_sources_project ON sources(project_id)",
     ],
+    # v4：回收站（软删除）
+    [
+        "ALTER TABLE articles ADD COLUMN deleted_at TEXT",
+        "ALTER TABLE projects ADD COLUMN deleted_at TEXT",
+    ],
 ]
 
 
@@ -182,8 +187,10 @@ def rename_project(conn: sqlite3.Connection, pid: int, name: str) -> None:
 
 
 def list_projects(conn: sqlite3.Connection) -> list[tuple]:
-    """返回 [(id, name)]，按创建时间排序。"""
-    rows = conn.execute("SELECT id, name FROM projects ORDER BY id").fetchall()
+    """返回 [(id, name)]，按创建时间排序（不含回收站）。"""
+    rows = conn.execute(
+        "SELECT id, name FROM projects WHERE deleted_at IS NULL ORDER BY id"
+    ).fetchall()
     return [(r["id"], r["name"]) for r in rows]
 
 
@@ -202,9 +209,10 @@ def create_article(conn: sqlite3.Connection, project_id: int, title: str) -> int
 
 
 def list_articles(conn: sqlite3.Connection, project_id: int) -> list[tuple]:
-    """返回 [(id, title, updated_at)]。"""
+    """返回 [(id, title, updated_at)]（不含回收站）。"""
     rows = conn.execute(
-        "SELECT id, title, updated_at FROM articles WHERE project_id = ? ORDER BY updated_at DESC",
+        "SELECT id, title, updated_at FROM articles WHERE project_id = ? AND deleted_at IS NULL"
+        " ORDER BY updated_at DESC",
         (project_id,),
     ).fetchall()
     return [(r["id"], r["title"], r["updated_at"]) for r in rows]
@@ -399,3 +407,69 @@ def create_evidence_snapshot(conn, source_id: int, requested_url: str, final_url
 def get_source(conn, sid: int) -> dict | None:
     row = conn.execute("SELECT * FROM sources WHERE id = ?", (sid,)).fetchone()
     return dict(row) if row else None
+
+
+# ---------- 回收站 / 历史 / 导出（v4） ----------
+
+def soft_delete_article(conn, aid: int) -> bool:
+    cur = conn.execute("UPDATE articles SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", (_now(), aid))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def restore_article(conn, aid: int) -> bool:
+    cur = conn.execute("UPDATE articles SET deleted_at = NULL WHERE id = ?", (aid,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def list_trash(conn, project_id: int | None = None) -> list[dict]:
+    if project_id is not None:
+        rows = conn.execute(
+            "SELECT id, project_id, title, updated_at FROM articles"
+            " WHERE deleted_at IS NOT NULL AND project_id = ? ORDER BY deleted_at DESC",
+            (project_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, project_id, title, updated_at FROM articles"
+            " WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def soft_delete_project(conn, pid: int) -> bool:
+    cur = conn.execute("UPDATE projects SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", (_now(), pid))
+    conn.commit()
+    if cur.rowcount:
+        conn.execute("UPDATE articles SET deleted_at = ? WHERE project_id = ? AND deleted_at IS NULL", (_now(), pid))
+        conn.commit()
+        return True
+    return False
+
+
+def list_revisions(conn, aid: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, version, reason, created_at FROM article_revisions"
+        " WHERE article_id = ? ORDER BY version DESC", (aid,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_revision(conn, aid: int, version: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM article_revisions WHERE article_id = ? AND version = ?", (aid, version)
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["blocks"] = json.loads(d.pop("blocks_json") or "[]")
+    return d
+
+
+def restore_revision(conn, aid: int, version: int) -> int:
+    """恢复历史版本：blocks 写回并升新版本（reason=restore）。"""
+    rev = get_revision(conn, aid, version)
+    if rev is None:
+        raise NotFoundError(f"版本 {version} 不存在")
+    return save_article(conn, aid, blocks=rev["blocks"], base_version=None, reason="restore")

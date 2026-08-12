@@ -65,6 +65,9 @@ async function loadArticles(pid) {
   box.innerHTML = arts.map(a => `
     <div class="doc sub ${currentAid === a.id ? 'active' : ''}" data-aid="${a.id}">
       <span class="dot"></span><span class="name">${escapeHtml(a.title)}</span>
+      <span class="del" data-del="${a.id}" title="移入回收站" aria-label="删除草稿">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M6 4V2.5h4V4M4 4l.7 9h6.6l.7-9M6.5 7v3.5M9.5 7v3.5"/></svg>
+      </span>
     </div>`).join('');
   box.querySelectorAll('.doc[data-aid]').forEach(d => {
     d.setAttribute('role', 'button');
@@ -74,6 +77,15 @@ async function loadArticles(pid) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.click(); }
     });
   });
+  box.querySelectorAll('.del').forEach(del => del.addEventListener('click', async e => {
+    e.stopPropagation();
+    const aid = +del.dataset.del;
+    if (!confirm('把这篇草稿移入回收站？（可恢复）')) return;
+    await api(`/api/articles/${aid}`, { method: 'DELETE' });
+    if (currentAid === aid) { currentAid = null; location.reload(); }
+    await loadArticles(pid);
+    toast_('已移入回收站');
+  }));
 }
 
 /* ---------- 命名浮层 ---------- */
@@ -110,7 +122,8 @@ function openArticle(aid) {
     $('#doc-title').textContent = a.title;
 
     let html = `<div class="art-title">${escapeHtml(a.title)}</div>`;
-    html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span></div>`;
+    html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span>
+      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-export">导出</button></span></div>`;
     if (a.blocks.length === 0) {
       html += `<div class="blk edit empty" contenteditable="true" data-bid="${crypto.randomUUID()}"></div>`;
     } else {
@@ -119,6 +132,10 @@ function openArticle(aid) {
     art.innerHTML = html;
     bindEditor();
     renderCitationBadges(); // 引用编号由服务端数据计算，badge 不写入正文 text
+    const bh = $('#btn-history');
+    if (bh) bh.addEventListener('click', showHistory);
+    const be = $('#btn-export');
+    if (be) be.addEventListener('click', () => { location.href = `/api/articles/${aid}/export`; });
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     $('#doc-scroll').scrollTop = 0;
@@ -455,6 +472,34 @@ function renderInsight(r) {
     else if (act === 'search') runSearch(firstBlock());
     else if (act === 'check') runCheck(firstBlock());
   }));
+}
+
+/* 版本历史：AI 改写/核验采纳/手动恢复会记录版本，可一键恢复 */
+async function showHistory() {
+  if (!currentAid) return;
+  try {
+    const r = await api(`/api/articles/${currentAid}/revisions`);
+    const revs = r.revisions || [];
+    if (!revs.length) { toast_('还没有历史版本（AI 改写/核验采纳时自动记录）'); return; }
+    const card = document.createElement('div');
+    card.className = 'ai-card';
+    const reasonLabel = v => ({ ai_rewrite: 'AI 改写', ai_check: '核验修订', restore: '版本恢复', autosave: '自动保存' }[v] || v);
+    card.innerHTML = '<div class="ai-head">版本历史 <button class="mini2" id="hist-close" style="float:right">关闭</button></div>'
+      + revs.map(v => `<div class="res">
+          <div class="t">v${v.version} · ${reasonLabel(v.reason)}</div>
+          <div class="sn">${escapeHtml(String(v.created_at).replace('T', ' ').slice(0, 16))}</div>
+          <div class="res-acts"><button class="mini2" data-x="restore" data-v="${v.version}">恢复此版本</button></div>
+        </div>`).join('');
+    $('#cardflow').prepend(card);
+    $('#hist-close').onclick = () => card.remove();
+    card.querySelectorAll('[data-x="restore"]').forEach(b => b.onclick = async () => {
+      if (!confirm(`恢复到 v${b.dataset.v}？（当前内容会保留为历史）`)) return;
+      await api(`/api/articles/${currentAid}/revisions/${b.dataset.v}/restore`, { method: 'POST' });
+      card.remove();
+      openArticle(currentAid);
+      toast_('已恢复到 v' + b.dataset.v);
+    });
+  } catch (e) { toast_('历史加载失败：' + e.message); }
 }
 
 /* 引用编号渲染：由文章 citations 计算，badge 不写入正文（保存时无 [N] 污染） */
