@@ -95,9 +95,9 @@
 </div>
 
 <!-- 设置弹窗 -->
-<div id="settings-modal" class="modal" style="display:none">
+<div id="settings-modal" class="modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div class="modal-card">
-    <div class="modal-head">模型设置 <button id="modal-close">×</button></div>
+    <div class="modal-head"><span id="modal-title">模型设置</span> <button id="modal-close" aria-label="关闭设置">×</button></div>
     <label>选择服务商（自动填好地址和模型名）</label>
     <div class="presets" id="presets">
       <button class="preset" data-p="deepseek">DeepSeek</button>

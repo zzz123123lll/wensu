@@ -31,18 +31,26 @@ function renderSide() {
     `;
   }).join('');
 
-  $('#side-list').querySelectorAll('.proj').forEach(proj => proj.addEventListener('click', async () => {
-    const pid = +proj.dataset.pid;
-    expanded[pid] = !expanded[pid];
-    renderSide();
-    if (expanded[pid]) await loadArticles(pid);
-  }));
+  $('#side-list').querySelectorAll('.proj').forEach(proj => {
+    proj.setAttribute('role', 'button');
+    proj.tabIndex = 0;
+    proj.addEventListener('click', async () => {
+      const pid = +proj.dataset.pid;
+      expanded[pid] = !expanded[pid];
+      renderSide();
+      if (expanded[pid]) await loadArticles(pid);
+    });
+    proj.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); proj.click(); }
+    });
+  });
   $('#side-list').querySelectorAll('.doc[data-new]').forEach(row => row.addEventListener('click', e => {
     e.stopPropagation();
     inlineName('草稿标题', async name => {
       const pid = +row.dataset.pid;
-      await api(`/api/projects/${pid}/articles`, { method: 'POST', body: JSON.stringify({ title: name }) });
+      const created = await api(`/api/projects/${pid}/articles`, { method: 'POST', body: JSON.stringify({ title: name }) });
       await loadArticles(pid);
+      openArticle(created.id); // 新建即打开
       toast_('已新建草稿「' + name + '」');
     });
   }));
@@ -58,7 +66,14 @@ async function loadArticles(pid) {
     <div class="doc sub ${currentAid === a.id ? 'active' : ''}" data-aid="${a.id}">
       <span class="dot"></span><span class="name">${escapeHtml(a.title)}</span>
     </div>`).join('');
-  box.querySelectorAll('.doc[data-aid]').forEach(d => d.addEventListener('click', () => openArticle(+d.dataset.aid)));
+  box.querySelectorAll('.doc[data-aid]').forEach(d => {
+    d.setAttribute('role', 'button');
+    d.tabIndex = 0;
+    d.addEventListener('click', () => openArticle(+d.dataset.aid));
+    d.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.click(); }
+    });
+  });
 }
 
 /* ---------- 命名浮层 ---------- */
@@ -354,6 +369,7 @@ async function runRewrite(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
+      markDirty(currentAid); // 改动标记（AI reason 保存）
       saveNow(currentAid, 'ai_rewrite');
       toast_('已接受，改动已保存');
     };
@@ -530,6 +546,7 @@ async function runCheck(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
+      markDirty(currentAid); // 改动标记（AI reason 保存）
       saveNow(currentAid, 'ai_check');
       toast_('已按建议修订');
     };
