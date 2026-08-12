@@ -69,6 +69,7 @@ class SettingsIn(BaseModel):
 class AskIn(BaseModel):
     prompt: str
     context: str = ""
+    article_id: int | None = None
 
 
 class AnchorMixin(BaseModel):
@@ -134,6 +135,24 @@ class SuggestIn(BaseModel):
     article_id: int
     block_id: str | None = None
     issue: str | None = None
+
+
+class PrefIn(BaseModel):
+    key: str
+    content: str
+
+
+class ProfileIn(BaseModel):
+    name: str
+    base_url: str
+    model: str
+    api_key: str | None = None
+    capabilities: str = "json_mode,stream"
+
+
+class BindingIn(BaseModel):
+    task: str
+    profile_id: int
 
 
 def _ai_error(e: LLMError) -> HTTPException:
@@ -272,7 +291,23 @@ def api_save_settings(body: SettingsIn):
 def api_ai_ask(body: AskIn):
     conn = _conn()
     try:
-        return {"reply": ai_service.ask(conn, body.prompt, body.context)}
+        # 作者记忆注入（透明：设置中可查看/删除）；Ask 历史按草稿隔离注入
+        prefs = db.get_prefs_map(conn)
+        ctx = body.context
+        if prefs:
+            pref_block = "作者写作偏好（来自用户明确保存的记忆）：" + "；".join(f"{k}：{v}" for k, v in prefs.items())
+            ctx = pref_block + ("\n\n" + ctx if ctx else "")
+        history = db.list_asks(conn, body.article_id, 6) if body.article_id else []
+        if history:
+            hist_block = "本草稿最近的问答（作为上下文，保持对话连贯）：\n" + "\n".join(
+                f"问：{h['prompt'][:300]}\n答：{h['response'][:300]}" for h in reversed(history)
+            )
+            ctx = (ctx + "\n\n" if ctx else "") + hist_block
+        answer = ai_service.ask(conn, body.prompt, ctx)
+        model = ai_service.model_name_for(conn, "ask")
+        if body.article_id:
+            db.record_ask(conn, body.article_id, body.prompt, answer, model)
+        return {"reply": answer, "model": model}
     except LLMError as e:
         raise _ai_error(e)
     finally:
@@ -283,7 +318,11 @@ def api_ai_ask(body: AskIn):
 def api_ai_rewrite(body: RewriteIn):
     conn = _conn()
     try:
-        return {"candidates": ai_service.rewrite(conn, body.text), "anchor": _anchor(body)}
+        return {
+            "candidates": ai_service.rewrite(conn, body.text),
+            "anchor": _anchor(body),
+            "model": ai_service.model_name_for(conn, "rewrite"),
+        }
     except LLMError as e:
         raise _ai_error(e)
     finally:
@@ -539,6 +578,123 @@ def api_copilot_suggest(body: SuggestIn):
             # 手动标记后刷新建议：把标记也记入信号（保持状态一致）
             copilot.record_signal(body.article_id, {"type": "mark", "issue": body.issue, "focus": body.block_id or "article"})
         return {"suggestions": sugs, "state": state}
+    finally:
+        conn.close()
+
+
+@app.get("/api/articles/{aid}/asks")
+def api_list_asks(aid: int):
+    conn = _conn()
+    try:
+        return {"asks": db.list_asks(conn, aid, 20)}
+    finally:
+        conn.close()
+
+
+# ---------- 作者记忆（透明可删） ----------
+
+@app.get("/api/prefs")
+def api_list_prefs():
+    conn = _conn()
+    try:
+        return {"prefs": db.list_prefs(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/prefs")
+def api_add_pref(body: PrefIn):
+    key = body.key.strip()
+    content = body.content.strip()
+    if not key or not content:
+        raise HTTPException(400, "偏好键与内容不能为空")
+    conn = _conn()
+    try:
+        db.add_pref(conn, key[:50], content)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/prefs/{key}")
+def api_delete_pref(key: str):
+    conn = _conn()
+    try:
+        if not db.delete_pref(conn, key):
+            raise HTTPException(404, "偏好不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------- 多模型配置（profile + task binding） ----------
+
+@app.get("/api/profiles")
+def api_list_profiles():
+    conn = _conn()
+    try:
+        return {"profiles": db.list_profiles(conn), "bindings": db.get_bindings(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/profiles")
+def api_create_profile(body: ProfileIn):
+    name = body.name.strip()
+    if not name or not body.base_url.strip() or not body.model.strip():
+        raise HTTPException(400, "名称/地址/模型不能为空")
+    try:
+        settings._validate_base_url(body.base_url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    enc = settings._encrypt(body.api_key.strip().encode("utf-8")) if body.api_key and body.api_key.strip() else None
+    conn = _conn()
+    try:
+        pid = db.create_profile(conn, name, body.base_url.strip(), body.model.strip(), enc, body.capabilities)
+        return {"id": pid}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/profiles/{pid}")
+def api_delete_profile(pid: int):
+    conn = _conn()
+    try:
+        if not db.delete_profile(conn, pid):
+            raise HTTPException(404, "模型不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.put("/api/bindings")
+def api_set_binding(body: BindingIn):
+    if body.task not in ("ask", "rewrite", "insight", "search_synthesis", "check"):
+        raise HTTPException(400, "未知任务类型")
+    conn = _conn()
+    try:
+        db.set_binding(conn, body.task, body.profile_id)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/profiles/{pid}/test")
+def api_test_profile(pid: int):
+    """连接测试：发最小请求探测可达性，不保存任何用户内容。"""
+    conn = _conn()
+    try:
+        p = db.get_profile(conn, pid)
+        if p is None:
+            raise HTTPException(404, "模型不存在")
+        key = db.get_profile_key(conn, pid)
+        if not key:
+            raise HTTPException(400, "该模型未配置 API Key")
+        client = LLMClient(base_url=p["base_url"], api_key=key, model=p["model"])
+        client.chat([{"role": "user", "content": "ping"}], json_mode=False, max_tokens=5)
+        return {"ok": True, "model": p["model"]}
+    except LLMError as e:
+        raise HTTPException(502, str(e))
     finally:
         conn.close()
 

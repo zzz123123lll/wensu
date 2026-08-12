@@ -261,7 +261,87 @@ document.addEventListener('keydown', e => {
   }
 });
 
-/* ========== 模型设置 ========== */
+/* ---------- Phase 7：作者偏好 + 多模型配置（设置弹窗内） ---------- */
+const TASKS = [['ask', 'Ask'], ['rewrite', '改写'], ['insight', '洞察'], ['search_synthesis', '搜索'], ['check', '核验']];
+
+async function loadPrefs() {
+  try {
+    const r = await api('/api/prefs');
+    const box = $('#prefs-list');
+    box.innerHTML = r.prefs.length ? r.prefs.map(p =>
+      `<div class="pf-item"><span class="k">${escapeHtml(p.key)}</span><span>${escapeHtml(p.content)}</span><span class="x" data-del="${escapeHtml(p.key)}" title="删除">✕</span></div>`
+    ).join('') : '<div style="font-size:12px;color:var(--fg-3)">还没有偏好。Ask 回答里可点「记住」保存。</div>';
+    box.querySelectorAll('.x').forEach(x => x.onclick = async () => {
+      await api('/api/prefs/' + encodeURIComponent(x.dataset.del), { method: 'DELETE' });
+      loadPrefs();
+      toast_('已删除偏好');
+    });
+  } catch { /* 偏好加载失败不打扰 */ }
+}
+
+async function loadProfiles() {
+  try {
+    const r = await api('/api/profiles');
+    const box = $('#profiles-list');
+    box.innerHTML = r.profiles.length ? r.profiles.map(p =>
+      `<div class="pf-item"><span class="k">${escapeHtml(p.name)}</span><span class="m">${escapeHtml(p.model)} · ${p.has_key ? '已配 Key' : '无 Key'}</span>
+       <button class="mini2" data-test="${p.id}">测试</button>
+       <span class="x" data-del="${p.id}" title="删除">✕</span></div>`
+    ).join('') : '<div style="font-size:12px;color:var(--fg-3)">还没有额外模型。上方「默认模型」即主配置。</div>';
+    box.querySelectorAll('[data-test]').forEach(b => b.onclick = async () => {
+      try {
+        const t = await api(`/api/profiles/${b.dataset.test}/test`, { method: 'POST' });
+        toast_('连接正常：' + t.model);
+      } catch (e) { toast_('连接失败：' + e.message); }
+    });
+    box.querySelectorAll('.x[data-del]').forEach(x => x.onclick = async () => {
+      await api('/api/profiles/' + x.dataset.del, { method: 'DELETE' });
+      loadProfiles();
+      toast_('已删除模型');
+    });
+    // 任务绑定下拉
+    const br = $('#bind-row');
+    br.innerHTML = '任务绑定：' + TASKS.map(([task, label]) => {
+      const cur = r.bindings[task];
+      return `<span>${label} <select data-task="${task}">
+        <option value="">默认模型</option>
+        ${r.profiles.map(p => `<option value="${p.id}" ${cur === p.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+      </select></span>`;
+    }).join('');
+    br.querySelectorAll('select').forEach(sel => sel.onchange = async () => {
+      await api('/api/bindings', { method: 'PUT', body: JSON.stringify({ task: sel.dataset.task, profile_id: +sel.value }) });
+      toast_('已绑定');
+    });
+  } catch { /* 不打扰 */ }
+}
+
+/* 设置弹窗打开时加载偏好与模型配置 */
+const _origOpen = $('#btn-settings').onclick;
+$('#btn-settings').addEventListener('click', () => { loadPrefs(); loadProfiles(); });
+
+$('#pref-add-btn').addEventListener('click', async () => {
+  const key = $('#pref-key').value.trim();
+  const content = $('#pref-content').value.trim();
+  if (!key || !content) { toast_('偏好名和内容都要填'); return; }
+  await api('/api/prefs', { method: 'POST', body: JSON.stringify({ key, content }) });
+  $('#pref-key').value = ''; $('#pref-content').value = '';
+  loadPrefs();
+  toast_('已记住偏好，Ask 时会自动参考');
+});
+
+$('#pf-add-btn').addEventListener('click', async () => {
+  const name = $('#pf-name').value.trim();
+  const base_url = $('#pf-base').value.trim();
+  const model = $('#pf-model').value.trim();
+  const api_key = $('#pf-key').value.trim();
+  if (!name || !base_url || !model) { toast_('名称/地址/模型都要填'); return; }
+  try {
+    await api('/api/profiles', { method: 'POST', body: JSON.stringify({ name, base_url, model, api_key: api_key || null }) });
+    $('#pf-name').value = ''; $('#pf-base').value = ''; $('#pf-model').value = ''; $('#pf-key').value = '';
+    loadProfiles();
+    toast_('已添加模型，可在任务绑定里选用');
+  } catch (e) { toast_('添加失败：' + e.message); }
+});
 let cfg = { configured: false, base_url: '', model: '' };
 
 async function loadSettings() {
@@ -362,9 +442,23 @@ async function sendAsk() {
   const busy = addPanelCard('思考中', '…');
   try {
     const ctx = collectBlocks().map(b => b.text).filter(Boolean).join('\n').slice(0, 3000);
-    const r = await api('/api/ai/ask', { method: 'POST', body: JSON.stringify({ prompt: t, context: ctx }) });
+    const r = await api('/api/ai/ask', { method: 'POST', body: JSON.stringify({ prompt: t, context: ctx, article_id: currentAid }) });
     busy.remove();
-    addPanelCard('回答', r.reply);
+    // 回答卡：显示实际模型 + 「记住偏好」入口（作者记忆，透明可删）
+    const card = addPanelCard('回答' + (r.model ? ' · ' + escapeHtml(r.model) : ''), r.reply, { model: r.model });
+    const remember = document.createElement('button');
+    remember.className = 'mini2';
+    remember.textContent = '记住偏好';
+    remember.title = '把这条回答里的写作偏好存进记忆（设置中可删）';
+    remember.style.marginTop = '6px';
+    remember.onclick = () => {
+      const key = prompt('偏好名（如：文风）');
+      if (!key) return;
+      const content = prompt('偏好的内容（如：多用短句）');
+      if (!content) return;
+      api('/api/prefs', { method: 'POST', body: JSON.stringify({ key, content }) }).then(() => toast_('已记住，Ask 时会自动参考')).catch(e => toast_('保存失败：' + e.message));
+    };
+    card.appendChild(remember);
   } catch (e) {
     busy.remove();
     addPanelCard('出错', e.message);

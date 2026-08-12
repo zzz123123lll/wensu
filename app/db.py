@@ -12,6 +12,8 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
+from app.settings import _decrypt as settings_decrypt
+
 # 默认数据库路径（基于文件位置，任意 CWD 可启动）
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "workbench.db")
 
@@ -120,6 +122,36 @@ MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE articles ADD COLUMN deleted_at TEXT",
         "ALTER TABLE projects ADD COLUMN deleted_at TEXT",
+    ],
+    # v5：Ask 历史 / 作者记忆 / 多模型 profile
+    [
+        "CREATE TABLE IF NOT EXISTS article_asks ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " article_id INTEGER NOT NULL REFERENCES articles(id),"
+        " prompt TEXT NOT NULL,"
+        " response TEXT NOT NULL DEFAULT '',"
+        " model TEXT NOT NULL DEFAULT '',"
+        " created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_asks_article ON article_asks(article_id, id)",
+        "CREATE TABLE IF NOT EXISTS author_prefs ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " key TEXT NOT NULL UNIQUE,"
+        " content TEXT NOT NULL,"
+        " source TEXT NOT NULL DEFAULT 'user',"
+        " created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS model_profiles ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " name TEXT NOT NULL,"
+        " base_url TEXT NOT NULL,"
+        " model TEXT NOT NULL,"
+        " api_key_enc BLOB,"
+        " capabilities TEXT NOT NULL DEFAULT 'json_mode,stream',"
+        " enabled INTEGER NOT NULL DEFAULT 1,"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS task_bindings ("
+        " task TEXT PRIMARY KEY,"
+        " profile_id INTEGER NOT NULL REFERENCES model_profiles(id))",
     ],
 ]
 
@@ -473,3 +505,114 @@ def restore_revision(conn, aid: int, version: int) -> int:
     if rev is None:
         raise NotFoundError(f"版本 {version} 不存在")
     return save_article(conn, aid, blocks=rev["blocks"], base_version=None, reason="restore")
+
+
+# ---------- Phase 7：Ask 历史 / 作者记忆 / 多模型 ----------
+
+ASK_KEEP = 30   # checkpoint：超过即裁剪，保留最近 30 条
+
+def record_ask(conn, article_id: int, prompt: str, response: str = "", model: str = "") -> int:
+    cur = conn.execute(
+        "INSERT INTO article_asks (article_id, prompt, response, model, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (article_id, prompt[:4000], response[:8000], model, _now()),
+    )
+    conn.commit()
+    n = conn.execute("SELECT COUNT(*) AS n FROM article_asks WHERE article_id = ?", (article_id,)).fetchone()["n"]
+    if n > ASK_KEEP:
+        conn.execute(
+            "DELETE FROM article_asks WHERE article_id = ? AND id NOT IN ("
+            " SELECT id FROM article_asks WHERE article_id = ? ORDER BY id DESC LIMIT ?)",
+            (article_id, article_id, ASK_KEEP),
+        )
+        conn.commit()
+    return cur.lastrowid
+
+
+def list_asks(conn, article_id: int, limit: int = 10) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, prompt, response, model, created_at FROM article_asks"
+        " WHERE article_id = ? ORDER BY id DESC LIMIT ?", (article_id, limit)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_pref(conn, key: str, content: str, source: str = "user") -> int:
+    conn.execute(
+        "INSERT INTO author_prefs (key, content, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
+        (key, content[:500], source, _now(), _now()),
+    )
+    conn.commit()
+    row = conn.execute("SELECT id FROM author_prefs WHERE key = ?", (key,)).fetchone()
+    return row["id"]
+
+
+def list_prefs(conn) -> list[dict]:
+    rows = conn.execute("SELECT id, key, content, source, updated_at FROM author_prefs ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_pref(conn, key: str) -> bool:
+    cur = conn.execute("DELETE FROM author_prefs WHERE key = ?", (key,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_prefs_map(conn) -> dict[str, str]:
+    rows = conn.execute("SELECT key, content FROM author_prefs").fetchall()
+    return {r["key"]: r["content"] for r in rows}
+
+
+def create_profile(conn, name: str, base_url: str, model: str, api_key_enc: bytes | None,
+                   capabilities: str = "json_mode,stream") -> int:
+    cur = conn.execute(
+        "INSERT INTO model_profiles (name, base_url, model, api_key_enc, capabilities, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (name[:50], base_url, model, api_key_enc, capabilities, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_profiles(conn) -> list[dict]:
+    rows = conn.execute("SELECT * FROM model_profiles ORDER BY id").fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["has_key"] = bool(d.pop("api_key_enc"))
+        out.append(d)
+    return out
+
+
+def delete_profile(conn, pid: int) -> bool:
+    conn.execute("DELETE FROM task_bindings WHERE profile_id = ?", (pid,))
+    cur = conn.execute("DELETE FROM model_profiles WHERE id = ?", (pid,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_binding(conn, task: str, profile_id: int) -> None:
+    conn.execute(
+        "INSERT INTO task_bindings (task, profile_id) VALUES (?, ?)"
+        " ON CONFLICT(task) DO UPDATE SET profile_id = excluded.profile_id",
+        (task, profile_id),
+    )
+    conn.commit()
+
+
+def get_bindings(conn) -> dict[str, int]:
+    rows = conn.execute("SELECT task, profile_id FROM task_bindings").fetchall()
+    return {r["task"]: r["profile_id"] for r in rows}
+
+
+def get_profile(conn, pid: int) -> dict | None:
+    row = conn.execute("SELECT * FROM model_profiles WHERE id = ?", (pid,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_profile_key(conn, pid: int) -> str:
+    row = conn.execute("SELECT api_key_enc FROM model_profiles WHERE id = ?", (pid,)).fetchone()
+    if not row or not row["api_key_enc"]:
+        return ""
+    return settings_decrypt(bytes(row["api_key_enc"]))

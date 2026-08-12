@@ -17,15 +17,46 @@ from app.llm import LLMClient, LLMError
 from app.settings import get_api_key, get_settings
 
 
-def _require_client(conn) -> LLMClient:
+def _require_client(conn, task: str = "ask") -> LLMClient:
+    """按任务取模型：有 task binding 用 profile，否则沿用全局 settings（兼容）。"""
+    profile = _profile_for_task(conn, task)
+    if profile is not None:
+        key = profile.get("api_key") or ""
+        if not key:
+            raise LLMError("模型「%s」未配置 API Key，请在设置中检查" % profile.get("name", ""), "config")
+        return LLMClient(base_url=profile["base_url"], api_key=key, model=profile["model"])
     s = get_settings(conn)
     if not s["configured"]:
-        raise LLMError("尚未配置模型：请先到设置里填写 API Key 与模型", "config")
-    return LLMClient(s["base_url"], get_api_key(conn), s["model"])
+        raise LLMError("尚未配置模型：请在右上角 ⚙ 设置 API Key 和模型", "config")
+    return LLMClient(base_url=s["base_url"], api_key=get_api_key(conn), model=s["model"])
+
+
+def _profile_for_task(conn, task: str) -> dict | None:
+    try:
+        bindings = db.get_bindings(conn)
+        pid = bindings.get(task)
+        if pid is None:
+            return None
+        p = db.get_profile(conn, pid)
+        if p is None or not p["enabled"]:
+            return None
+        out = dict(p)
+        out["api_key"] = db.get_profile_key(conn, pid)
+        return out
+    except Exception:
+        return None
+
+
+def model_name_for(conn, task: str) -> str:
+    p = _profile_for_task(conn, task)
+    if p:
+        return p["model"]
+    s = get_settings(conn)
+    return s.get("model", "")
 
 
 def ask(conn, prompt: str, context: str) -> str:
-    client = _require_client(conn)
+    client = _require_client(conn, task="ask")
     messages = [
         {
             "role": "system",
@@ -40,7 +71,7 @@ def ask(conn, prompt: str, context: str) -> str:
 
 
 def rewrite(conn, text: str) -> list[dict]:
-    client = _require_client(conn)
+    client = _require_client(conn, task="rewrite")
     messages = [
         {
             "role": "system",
@@ -76,7 +107,7 @@ def _parse_rewrite(raw: str, fallback_text: str) -> list[dict]:
 
 
 def insight(conn, title: str, blocks: list) -> dict:
-    client = _require_client(conn)
+    client = _require_client(conn, task="insight")
     body = "\n".join(str(b.get("text") or "") for b in blocks if b.get("text"))
     messages = [
         {
@@ -201,7 +232,7 @@ def search_stream(conn, query: str):
 
 def _model_search(conn, query: str) -> list[dict]:
     """LLM 知识降级：基于模型知识给出资料线索（不联网）。"""
-    client = _require_client(conn)
+    client = _require_client(conn, task="search_synthesis")
     messages = [
         {
             "role": "system",
@@ -293,7 +324,7 @@ def check(conn, claim: str, with_evidence: bool = True) -> dict:
 
     无证据时如实返回"待核实"（doubt），不虚构可信度。
     """
-    client = _require_client(conn)
+    client = _require_client(conn, task="check")
     evidence = []
     if with_evidence:
         evidence = _gather_evidence(conn, claim)

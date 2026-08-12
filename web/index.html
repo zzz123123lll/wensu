@@ -113,6 +113,25 @@
     <input id="set-model" placeholder="deepseek-chat">
     <label>API Key（留空 = 保留原 Key）</label>
     <input id="set-key" type="password" placeholder="sk-...">
+    <div class="sec-divider"></div>
+    <div class="sec-title">作者偏好（会注入 AI 上下文，可随时删除）</div>
+    <div id="prefs-list"></div>
+    <div class="pref-add">
+      <input id="pref-key" placeholder="偏好名，如：文风" maxlength="20">
+      <input id="pref-content" placeholder="内容，如：多用短句" maxlength="50">
+      <button id="pref-add-btn" class="mini2">记住</button>
+    </div>
+    <div class="sec-divider"></div>
+    <div class="sec-title">模型配置（按任务绑定不同模型）</div>
+    <div id="profiles-list"></div>
+    <div class="pref-add">
+      <input id="pf-name" placeholder="名称" maxlength="16">
+      <input id="pf-base" placeholder="https://api.deepseek.com/v1" style="width:150px">
+      <input id="pf-model" placeholder="模型名" maxlength="24">
+      <input id="pf-key" type="password" placeholder="API Key">
+      <button id="pf-add-btn" class="mini2">添加</button>
+    </div>
+    <div class="bind-row" id="bind-row"></div>
     <div class="modal-acts">
       <button class="btn btn-g" id="modal-cancel">取消</button>
       <button class="btn btn-p" id="modal-save">保存</button>

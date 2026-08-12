@@ -30,14 +30,14 @@ class FakeClient:
 
 
 def test_ask_requires_configuration(monkeypatch):
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: (_ for _ in ()).throw(LLMError("未配置", "config")))
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": (_ for _ in ()).throw(LLMError("未配置", "config")))
     with pytest.raises(LLMError):
         ai_service.ask(None, "怎么改开头", "正文...")
 
 
 def test_ask_passes_context(monkeypatch):
     fake = FakeClient(["回答"])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.ask(None, "怎么改开头", "这是正文上下文")
     assert out == "回答"
     msgs = fake.calls[0][0]
@@ -47,7 +47,7 @@ def test_ask_passes_context(monkeypatch):
 
 def test_rewrite_parses_two_candidates(monkeypatch):
     fake = FakeClient(['{"candidates": [{"label": "方案一", "text": "A"}, {"label": "方案二", "text": "B"}]}'])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.rewrite(None, "原文字")
     assert len(out) == 2
     assert out[0] == {"label": "方案一", "text": "A"}
@@ -56,7 +56,7 @@ def test_rewrite_parses_two_candidates(monkeypatch):
 
 def test_rewrite_fallback_on_bad_json(monkeypatch):
     fake = FakeClient(["这是第一行改写。\n这是第二行。"])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.rewrite(None, "原文字")
     assert len(out) == 1
     assert "第一行" in out[0]["text"]
@@ -64,7 +64,7 @@ def test_rewrite_fallback_on_bad_json(monkeypatch):
 
 def test_rewrite_empty_fallback(monkeypatch):
     fake = FakeClient(["   "])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.rewrite(None, "原文字")
     assert out[0]["text"] == "原文字"
 
@@ -72,7 +72,7 @@ def test_rewrite_empty_fallback(monkeypatch):
 def test_insight_parses(monkeypatch):
     payload = '{"insight": {"summary": "论点", "gap": "缺例子"}, "suggestions": [{"title": "补例子", "desc": "找案例", "action": "search"}, {"title": "改开头", "desc": "x", "action": "rewrite"}]}'
     fake = FakeClient([payload])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.insight(None, "标题", [{"text": "第一段"}, {"text": "第二段"}])
     assert out["insight"]["summary"] == "论点"
     assert out["suggestions"][0]["action"] == "search"
@@ -83,7 +83,7 @@ def test_insight_parses(monkeypatch):
 
 def test_insight_fallback_on_bad_json(monkeypatch):
     fake = FakeClient(["不是 JSON"])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.insight(None, "t", [])
     assert out["insight"] == {"summary": "", "gap": ""}
     assert out["suggestions"] == []
@@ -92,7 +92,7 @@ def test_insight_fallback_on_bad_json(monkeypatch):
 def test_insight_bad_action_falls_back_to_rewrite(monkeypatch):
     payload = '{"insight": {"summary": "s", "gap": "g"}, "suggestions": [{"title": "x", "desc": "y", "action": "publish"}]}'
     fake = FakeClient([payload])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.insight(None, "t", [])
     assert out["suggestions"][0]["action"] == "rewrite"
 
@@ -102,7 +102,7 @@ def test_insight_bad_action_falls_back_to_rewrite(monkeypatch):
 def test_check_parses_ok(monkeypatch):
     payload = '{"status": "ok", "reason": "有据可查", "suggestion": ""}'
     fake = FakeClient([payload])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "地球是圆的", with_evidence=False)
     assert out["status"] == "ok"
     assert out["reason"] == "有据可查"
@@ -112,7 +112,7 @@ def test_check_parses_ok(monkeypatch):
 def test_check_parses_fix(monkeypatch):
     payload = '{"status": "fix", "reason": "数据过时", "suggestion": "改为更稳妥的表述"}'
     fake = FakeClient([payload])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "56% 的创作者…", with_evidence=False)
     assert out["status"] == "fix"
     assert out["suggestion"] == "改为更稳妥的表述"
@@ -120,14 +120,14 @@ def test_check_parses_fix(monkeypatch):
 
 def test_check_bad_status_falls_back_doubt(monkeypatch):
     fake = FakeClient(['{"status": "maybe", "reason": "r"}'])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "x", with_evidence=False)
     assert out["status"] == "doubt"
 
 
 def test_check_bad_json_falls_back(monkeypatch):
     fake = FakeClient(["不是 JSON"])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "x", with_evidence=False)
     assert out["status"] == "doubt"
     assert out["suggestion"] == ""
@@ -139,7 +139,7 @@ def test_check_no_evidence_stays_doubt(monkeypatch):
     """抓不到证据 → 如实"待核实"，不虚构可信度。"""
     monkeypatch.setattr(ai_service, "_gather_evidence", lambda conn, c: [])
     fake = FakeClient(['{"status": "ok", "reason": "r", "suggestion": ""}'])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "某声称", with_evidence=True)
     assert out["evidence"] == []
     assert out["status"] == "ok"  # 无证据时判断仍由模型给出，但 evidence 为空如实标注
@@ -150,7 +150,7 @@ def test_check_evidence_binds_to_prompt_and_response(monkeypatch):
     ev = [{"evidence_id": 9, "title": "权威报告", "url": "https://a.com/r", "excerpt": "报告摘要内容"}]
     monkeypatch.setattr(ai_service, "_gather_evidence", lambda conn, c: ev)
     fake = FakeClient(['{"status": "ok", "reason": "依据[1]报告，可信", "suggestion": ""}'])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.check(None, "某声称", with_evidence=True)
     assert out["evidence"] == ev
     sys_prompt = fake.calls[0][0][0]["content"]
@@ -191,7 +191,7 @@ def test_search_model_fallback_when_web_unavailable(monkeypatch):
     monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: [])
     monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [])
     fake = FakeClient(['[{"title": "著作A", "url": "", "snippet": "相关"}]'])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service.search(None, "q")
     assert len(out) == 1
     assert out[0]["source"] == "model"
@@ -200,7 +200,7 @@ def test_search_model_fallback_when_web_unavailable(monkeypatch):
 
 def test_model_search_bad_json_gives_friendly_hint(monkeypatch):
     fake = FakeClient(["不是 JSON"])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: fake)
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": fake)
     out = ai_service._model_search(None, "q")
     assert len(out) == 1
     assert "不可达" in out[0]["title"]
@@ -219,7 +219,7 @@ def test_search_stream_events_order(monkeypatch):
     w = [{"title": "维基", "url": "u", "snippet": "s"}]
     monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: w)
     monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [])
-    monkeypatch.setattr(ai_service, "_require_client", lambda conn: FakeClient(["[]"]))
+    monkeypatch.setattr(ai_service, "_require_client", lambda conn, task="ask": FakeClient(["[]"]))
     events = [json.loads(line) for line in ai_service.search_stream(None, "q_stream")]
     types = [e["type"] for e in events]
     assert types == ["stage", "stage", "result"]
