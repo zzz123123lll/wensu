@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# 用户数据（含加密 API Key 的 settings 表）
+data/*.db
+data/backups/
+
+# 环境与密钥
+.env
+.env.*
+prototype/api_config.json
+
+# 前端
+node_modules/
+
+# 杂项
+*.log
+.DS_Store
+dist/
+build/

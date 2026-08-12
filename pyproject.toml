@@ -1,0 +1,22 @@
+[project]
+name = "wensu"
+version = "0.1.0"
+description = "文序 · AI 原生写作系统"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.141.1",
+    "uvicorn==0.52.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+]
+
+[project.scripts]
+wensu = "app.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
