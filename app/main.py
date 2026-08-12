@@ -95,6 +95,27 @@ class CheckIn(AnchorMixin):
     claim: str
 
 
+class SourceIn(BaseModel):
+    url: str
+    title: str = ""
+    snippet: str = ""
+    provider: str = ""
+
+
+class MaterialIn(BaseModel):
+    title: str
+    content: str = ""
+    source_id: int | None = None
+
+
+class CitationIn(BaseModel):
+    block_id: str
+    source_id: int
+    quote: str = ""
+    locator: str = ""
+    display_label: str = ""
+
+
 def _ai_error(e: LLMError) -> HTTPException:
     status = 400 if e.kind == "config" else 502
     return HTTPException(status, str(e))
@@ -297,7 +318,84 @@ def api_health():
         db_ok = "ok"
     except Exception:
         db_ok = "error"
-    return {"status": "ok", "version": "0.1.0", "db": db_ok}
+    return {"status": "ok", "version": "0.2.0", "db": db_ok}
+
+
+# ---------- 证据数据层（v3）API ----------
+
+@app.get("/api/projects/{pid}/sources")
+def api_list_sources(pid: int):
+    conn = _conn()
+    try:
+        return {"sources": db.list_sources(conn, pid)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects/{pid}/sources")
+def api_create_source(pid: int, body: SourceIn):
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(400, "来源地址不能为空")
+    conn = _conn()
+    try:
+        sid = db.create_source(conn, pid, url, body.title, body.snippet, body.provider)
+        return {"id": sid}
+    finally:
+        conn.close()
+
+
+@app.get("/api/projects/{pid}/materials")
+def api_list_materials(pid: int):
+    conn = _conn()
+    try:
+        return {"materials": db.list_materials(conn, pid)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects/{pid}/materials")
+def api_create_material(pid: int, body: MaterialIn):
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "素材标题不能为空")
+    conn = _conn()
+    try:
+        mid = db.create_material(conn, pid, title, body.content, body.source_id)
+        return {"id": mid}
+    finally:
+        conn.close()
+
+
+@app.get("/api/articles/{aid}/citations")
+def api_list_citations(aid: int):
+    conn = _conn()
+    try:
+        return {"citations": db.list_citations(conn, aid)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/articles/{aid}/citations")
+def api_create_citation(aid: int, body: CitationIn):
+    conn = _conn()
+    try:
+        cid = db.create_citation(conn, aid, body.block_id, body.source_id,
+                                 body.quote, body.locator, body.display_label)
+        return {"id": cid}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/citations/{cid}")
+def api_delete_citation(cid: int):
+    conn = _conn()
+    try:
+        if not db.delete_citation(conn, cid):
+            raise HTTPException(404, "引用不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
 
 
 # 静态前端（必须最后挂载；基于文件位置，任意 CWD 可用）

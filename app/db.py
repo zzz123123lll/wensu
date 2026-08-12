@@ -70,6 +70,52 @@ MIGRATIONS: list[list[str]] = [
         " reason TEXT NOT NULL DEFAULT '',"
         " created_at TEXT NOT NULL)",
     ],
+    # v3：Source / evidence snapshot / Material / Citation 证据数据层
+    [
+        "CREATE TABLE IF NOT EXISTS sources ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " project_id INTEGER NOT NULL REFERENCES projects(id),"
+        " url TEXT NOT NULL,"
+        " canonical_url TEXT NOT NULL DEFAULT '',"
+        " title TEXT NOT NULL DEFAULT '',"
+        " snippet TEXT NOT NULL DEFAULT '',"
+        " provider TEXT NOT NULL DEFAULT '',"
+        " verification_status TEXT NOT NULL DEFAULT 'unknown',"
+        " metadata_json TEXT NOT NULL DEFAULT '{}',"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS evidence_snapshots ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " source_id INTEGER NOT NULL REFERENCES sources(id),"
+        " requested_url TEXT NOT NULL,"
+        " final_url TEXT NOT NULL DEFAULT '',"
+        " fetched_at TEXT NOT NULL,"
+        " mime TEXT NOT NULL DEFAULT '',"
+        " content_hash TEXT NOT NULL DEFAULT '',"
+        " excerpt TEXT NOT NULL DEFAULT '',"
+        " fetch_status TEXT NOT NULL DEFAULT 'ok',"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS materials ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " project_id INTEGER NOT NULL REFERENCES projects(id),"
+        " source_id INTEGER REFERENCES sources(id),"
+        " title TEXT NOT NULL,"
+        " content TEXT NOT NULL DEFAULT '',"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS citations ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " article_id INTEGER NOT NULL REFERENCES articles(id),"
+        " block_id TEXT NOT NULL,"
+        " source_id INTEGER NOT NULL REFERENCES sources(id),"
+        " evidence_snapshot_id INTEGER REFERENCES evidence_snapshots(id),"
+        " quote TEXT NOT NULL DEFAULT '',"
+        " locator TEXT NOT NULL DEFAULT '',"
+        " display_label TEXT NOT NULL DEFAULT '',"
+        " verification_status TEXT NOT NULL DEFAULT 'unknown',"
+        " status TEXT NOT NULL DEFAULT 'active',"
+        " created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_citations_article ON citations(article_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sources_project ON sources(project_id)",
+    ],
 ]
 
 
@@ -238,3 +284,99 @@ def save_article_blocks(conn: sqlite3.Connection, aid: int, blocks: list) -> Non
 def update_article_title(conn: sqlite3.Connection, aid: int, title: str) -> None:
     """兼容薄封装：仅标题保存（不校验版本），供旧调用/测试使用。"""
     save_article(conn, aid, title=title)
+
+
+# ---------- 证据数据层（v3）：sources / materials / citations ----------
+
+def create_source(conn, project_id: int, url: str, title: str = "", snippet: str = "", provider: str = "") -> int:
+    """创建来源；同 project 同 url 复用已有（不重复建）。"""
+    row = conn.execute(
+        "SELECT id FROM sources WHERE project_id = ? AND url = ?", (project_id, url)
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO sources (project_id, url, canonical_url, title, snippet, provider, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (project_id, url, url, title[:200], snippet[:500], provider, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_sources(conn, project_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM sources WHERE project_id = ? ORDER BY id DESC", (project_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_material(conn, project_id: int, title: str, content: str = "", source_id: int | None = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO materials (project_id, source_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (project_id, source_id, title[:200], content, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_materials(conn, project_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM materials WHERE project_id = ? ORDER BY id DESC", (project_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_citation(conn, article_id: int, block_id: str, source_id: int,
+                    quote: str = "", locator: str = "", display_label: str = "") -> int:
+    # 越权校验：来源必须属于该文章所在项目
+    row = conn.execute(
+        "SELECT a.project_id AS ap, s.project_id AS sp FROM articles a, sources s"
+        " WHERE a.id = ? AND s.id = ?",
+        (article_id, source_id),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("文章或来源不存在")
+    if row["ap"] != row["sp"]:
+        raise NotFoundError("来源不属于该文章项目")
+    row = conn.execute(
+        "SELECT id FROM citations WHERE article_id = ? AND block_id = ? AND source_id = ?",
+        (article_id, block_id, source_id),
+    ).fetchone()
+    if row:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO citations (article_id, block_id, source_id, quote, locator, display_label, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (article_id, block_id, source_id, quote[:500], locator[:200], display_label[:200], _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_citations(conn, article_id: int) -> list[dict]:
+    """引用列表（含来源信息）；机械检查：Block 已删 → 标记 orphaned（落库）。"""
+    rows = conn.execute(
+        "SELECT c.*, s.url AS source_url, s.title AS source_title, s.provider AS source_provider,"
+        " s.verification_status AS source_verification"
+        " FROM citations c JOIN sources s ON s.id = c.source_id"
+        " WHERE c.article_id = ? ORDER BY c.id", (article_id,)
+    ).fetchall()
+    art = get_article(conn, article_id)
+    block_ids = {b["id"] for b in (art["blocks"] if art else [])}
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["status"] == "active" and d["block_id"] not in block_ids:
+            conn.execute("UPDATE citations SET status = 'orphaned' WHERE id = ?", (d["id"],))
+            d["status"] = "orphaned"
+        out.append(d)
+    if out:
+        conn.commit()
+    return out
+
+
+def delete_citation(conn, cid: int) -> bool:
+    cur = conn.execute("DELETE FROM citations WHERE id = ?", (cid,))
+    conn.commit()
+    return cur.rowcount > 0

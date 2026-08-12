@@ -118,6 +118,7 @@ function openArticle(aid) {
     }
     art.innerHTML = html;
     bindEditor();
+    renderCitationBadges(); // 引用编号由服务端数据计算，badge 不写入正文 text
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     $('#doc-scroll').scrollTop = 0;
@@ -456,6 +457,35 @@ function renderInsight(r) {
   }));
 }
 
+/* 引用编号渲染：由文章 citations 计算，badge 不写入正文（保存时无 [N] 污染） */
+async function renderCitationBadges() {
+  if (!currentAid) return;
+  try {
+    const r = await api(`/api/articles/${currentAid}/citations`);
+    const cites = r.citations.filter(c => c.status !== 'orphaned');
+    document.querySelectorAll('#article sup.cite').forEach(s => s.remove());
+    cites.forEach((c, i) => {
+      const block = document.querySelector(`#article .blk.edit[data-bid="${c.block_id}"]`);
+      if (block) {
+        const sup = document.createElement('sup');
+        sup.className = 'cite';
+        sup.textContent = '[' + (i + 1) + ']';
+        sup.title = (c.source_title || '来源') + (c.source_url ? ' · ' + c.source_url : '');
+        block.appendChild(sup);
+      }
+    });
+  } catch { /* 引用列表失败不阻断写作 */ }
+}
+
+/* 保存来源（复用同 url）+ 返回 source id */
+async function ensureSource(res, provider) {
+  const r = await api(`/api/projects/${currentPid}/sources`, {
+    method: 'POST',
+    body: JSON.stringify({ url: res.url || '', title: res.title, snippet: res.snippet, provider }),
+  });
+  return r.id;
+}
+
 /* ========== 搜索链路（真搜索：Wikipedia / DuckDuckGo，降级模型知识） ========== */
 async function runSearch(target) {
   target = target || firstBlock();
@@ -488,16 +518,32 @@ async function runSearch(target) {
       results.map((res, i) => `<div class="res">
         <div class="t">${escapeHtml(res.title)} <span class="src ${res.source === 'web' ? 'web' : ''}">${res.source === 'web' ? '已检索' : '模型知识'}</span></div>
         <div class="sn">${escapeHtml(res.snippet)}</div>
-        <div class="res-acts"><button class="mini2" data-x="cite">引用</button>
+        <div class="res-acts"><button class="mini2" data-x="cite">引用</button><button class="mini2" data-x="save">存入素材</button>
         ${(res.url && safeUrl(res.url)) ? `<a class="mini2 link" href="${escapeHtml(safeUrl(res.url))}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}</div>
       </div>`).join('');
-    card.querySelectorAll('[data-x="cite"]').forEach((b, i) => b.onclick = () => {
-      const sup = document.createElement('sup');
-      sup.style.cssText = 'color:var(--accent);font-weight:700;font-size:11px;margin-left:1px;';
-      sup.textContent = '[' + (i + 1) + ']';
-      target.appendChild(sup);
-      scheduleSave();
-      toast_('已插入引用标记 [' + (i + 1) + ']');
+    card.querySelectorAll('[data-x="cite"]').forEach((b, i) => b.onclick = async () => {
+      const res = results[i];
+      const quote = (sel ? sel.text : target.textContent.trim()).slice(0, 200);
+      try {
+        const sid = await ensureSource(res, res.source || 'model');
+        await api(`/api/articles/${currentAid}/citations`, {
+          method: 'POST',
+          body: JSON.stringify({ block_id: target.dataset.bid, source_id: sid, quote, display_label: res.title.slice(0, 60) }),
+        });
+        await renderCitationBadges();
+        toast_('已引用：' + (res.title || '来源'));
+      } catch (e) { toast_('引用失败：' + e.message); }
+    });
+    card.querySelectorAll('[data-x="save"]').forEach((b, i) => b.onclick = async () => {
+      const res = results[i];
+      try {
+        const sid = await ensureSource(res, res.source || 'model');
+        await api(`/api/projects/${currentPid}/materials`, {
+          method: 'POST',
+          body: JSON.stringify({ title: res.title.slice(0, 80), content: res.snippet, source_id: sid }),
+        });
+        toast_('已存入项目素材库');
+      } catch (e) { toast_('存入失败：' + e.message); }
     });
   } catch (e) {
     clearTimeout(timer);
