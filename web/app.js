@@ -222,12 +222,32 @@ function clearRecovery(aid) {
 }
 
 /* ---------- 事件委托（Enter 新建块后输入仍触发保存） ---------- */
+let composing = false; // 中文 IME 组合中
+
 function bindEditor() {
   const art = $('#article');
+  art.addEventListener('compositionstart', () => { composing = true; });
+  art.addEventListener('compositionend', e => {
+    composing = false;
+    const block = e.target.closest ? e.target.closest('.blk.edit') : null;
+    if (block) {
+      block.classList.toggle('empty', block.textContent === '');
+      markDirty(currentAid); // 组合结束后生成完整快照
+    }
+  });
+  art.addEventListener('paste', e => {
+    // 最小安全粘贴：只取纯文本，剔除 HTML/脚本/事件属性
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain') || '';
+    if (text) {
+      document.execCommand('insertText', false, text);
+      markDirty(currentAid);
+    }
+  });
   art.addEventListener('keydown', e => {
     const block = e.target.closest ? e.target.closest('.blk.edit') : null;
     if (!block) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !composing && !e.isComposing) {
       e.preventDefault();
       const next = document.createElement('div');
       next.className = 'blk edit empty';
