@@ -142,7 +142,7 @@ function bindEditor() {
         const next = document.createElement('div');
         next.className = 'blk edit empty';
         next.contentEditable = 'true';
-        next.dataset.bid = 'new-' + Date.now();
+        next.dataset.bid = crypto.randomUUID(); // 创建即稳定 UUID，不再每次生成
         block.after(next);
         next.focus();
         scheduleSave();
@@ -168,7 +168,7 @@ function bindEditor() {
 
 function collectBlocks() {
   return Array.from(document.querySelectorAll('#article .blk.edit')).map((d, i) => ({
-    id: d.dataset.bid.startsWith('new-') ? 'b' + Date.now() + '-' + i : d.dataset.bid,
+    id: d.dataset.bid, // 稳定 ID（Enter 时已生成 UUID；旧数据保留原 ID）
     type: d.tagName === 'H2' ? 'heading' : (d.tagName === 'BLOCKQUOTE' ? 'blockquote' : 'paragraph'),
     text: d.textContent,
     attrs: {},

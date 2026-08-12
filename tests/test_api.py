@@ -112,6 +112,46 @@ def test_autosave_does_not_create_revision(tmp_path):
     conn.close()
 
 
+def test_put_illegal_block_type_422(tmp_path):
+    db.DB_PATH = str(tmp_path / "t13.db")
+    client = TestClient(main.app)
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
+    aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
+    r = client.put(f"/api/articles/{aid}", json={
+        "blocks": [{"id": "b1", "type": "<script>", "text": "x", "attrs": {}}],
+        "base_version": 1,
+    })
+    assert r.status_code == 422
+
+
+def test_put_illegal_block_id_422(tmp_path):
+    db.DB_PATH = str(tmp_path / "t14.db")
+    client = TestClient(main.app)
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
+    aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
+    r = client.put(f"/api/articles/{aid}", json={
+        "blocks": [{"id": "x y z", "type": "paragraph", "text": "x", "attrs": {}}],
+        "base_version": 1,
+    })
+    assert r.status_code == 422
+
+
+def test_put_old_style_ids_ok(tmp_path):
+    """旧 ID（b1 / b<ts>-<i>）不受破坏。"""
+    db.DB_PATH = str(tmp_path / "t15.db")
+    client = TestClient(main.app)
+    pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
+    aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
+    blocks = [
+        {"id": "b1", "type": "paragraph", "text": "一", "attrs": {}},
+        {"id": "b1786453987650-1", "type": "heading", "text": "标题", "attrs": {"level": 2}},
+    ]
+    r = client.put(f"/api/articles/{aid}", json={"blocks": blocks, "base_version": 1})
+    assert r.status_code == 200
+    got = client.get(f"/api/articles/{aid}").json()
+    assert [b["id"] for b in got["blocks"]] == ["b1", "b1786453987650-1"]
+
+
 def test_health(tmp_path):
     db.DB_PATH = str(tmp_path / "t5.db")
     client = TestClient(main.app)

@@ -48,6 +48,9 @@ test('打开草稿、编辑并自动保存', async ({ page }) => {
   await page.waitForTimeout(3000);
   expect(savedBodies.length).toBeGreaterThan(0);
   expect(savedBodies.at(-1).blocks[0].text).toContain('你好世界');
+  // Block ID 稳定：所有保存请求中第一个块 ID 相同（不每次重新生成）
+  const ids = savedBodies.map(b => b.blocks[0].id);
+  expect(new Set(ids).size).toBe(1);
 });
 
 test('干净打开不触发洞察（默认不自动调用模型）', async ({ page }) => {

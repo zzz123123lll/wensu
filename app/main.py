@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app import ai_service, db, settings
 from app.llm import LLMError
+from app.schemas import Block
 
 # 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
@@ -34,7 +35,7 @@ class ArticleIn(BaseModel):
 
 class ArticleUpdate(BaseModel):
     title: str | None = None
-    blocks: list | None = None
+    blocks: list[Block] | None = None  # typed Block：非法输入 422
     base_version: int  # 乐观锁：客户端已知的服务端版本
     change_reason: str = "autosave"
 
@@ -142,9 +143,10 @@ def api_get_article(aid: int):
 def api_save_article(aid: int, body: ArticleUpdate):
     conn = _conn()
     try:
+        plain_blocks = [b.model_dump() for b in body.blocks] if body.blocks is not None else None
         try:
             version = db.save_article(
-                conn, aid, body.title, body.blocks,
+                conn, aid, body.title, plain_blocks,
                 base_version=body.base_version, reason=body.change_reason,
             )
         except db.NotFoundError:
@@ -161,7 +163,7 @@ def api_save_article(aid: int, body: ArticleUpdate):
             "ok": True,
             "article_id": aid,
             "version": version,
-            "blocks_hash": db.blocks_hash(body.blocks or []),
+            "blocks_hash": db.blocks_hash(plain_blocks or []),
         }
     finally:
         conn.close()
