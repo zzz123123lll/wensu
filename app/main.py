@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import ai_service, db, settings
+from app import ai_service, db, safe_fetch, settings
 from app.llm import LLMError
 from app.schemas import Block
 
@@ -114,6 +114,10 @@ class CitationIn(BaseModel):
     quote: str = ""
     locator: str = ""
     display_label: str = ""
+
+
+class FetchIn(BaseModel):
+    url: str
 
 
 def _ai_error(e: LLMError) -> HTTPException:
@@ -394,6 +398,26 @@ def api_delete_citation(cid: int):
         if not db.delete_citation(conn, cid):
             raise HTTPException(404, "引用不存在")
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects/{pid}/fetch")
+def api_fetch(pid: int, body: FetchIn):
+    """安全抓取 URL → 存 evidence snapshot（source 自动创建/复用）。"""
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(400, "地址不能为空")
+    try:
+        snap = safe_fetch.fetch_url(url)
+    except safe_fetch.SafeFetchError as e:
+        raise HTTPException(400, str(e))
+    conn = _conn()
+    try:
+        sid = db.create_source(conn, pid, url, title=snap["excerpt"][:80], snippet=snap["excerpt"][:500])
+        eid = db.create_evidence_snapshot(conn, sid, snap["requested_url"], snap["final_url"],
+                                          snap["mime"], snap["content_hash"], snap["excerpt"])
+        return {"evidence_id": eid, "source_id": sid, **snap}
     finally:
         conn.close()
 

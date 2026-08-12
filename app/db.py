@@ -380,3 +380,22 @@ def delete_citation(conn, cid: int) -> bool:
     cur = conn.execute("DELETE FROM citations WHERE id = ?", (cid,))
     conn.commit()
     return cur.rowcount > 0
+
+
+def create_evidence_snapshot(conn, source_id: int, requested_url: str, final_url: str = "",
+                             mime: str = "", content_hash: str = "", excerpt: str = "",
+                             fetch_status: str = "ok") -> int:
+    cur = conn.execute(
+        "INSERT INTO evidence_snapshots (source_id, requested_url, final_url, fetched_at,"
+        " mime, content_hash, excerpt, fetch_status, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (source_id, requested_url, final_url, _now(), mime[:100], content_hash[:64], excerpt[:2000],
+         fetch_status, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_source(conn, sid: int) -> dict | None:
+    row = conn.execute("SELECT * FROM sources WHERE id = ?", (sid,)).fetchone()
+    return dict(row) if row else None
