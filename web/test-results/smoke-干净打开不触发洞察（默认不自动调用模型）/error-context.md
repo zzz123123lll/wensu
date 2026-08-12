@@ -78,7 +78,7 @@ Received: 1
   7  |   projects: [{ id: 1, name: '随笔' }],
   8  |   articles: [{ id: 7, title: '第一篇', updated_at: '2026-01-01T00:00:00' }],
   9  |   article: {
-  10 |     id: 7, project_id: 1, title: '第一篇',
+  10 |     id: 7, project_id: 1, title: '第一篇', version: 1,
   11 |     blocks: [{ id: 'b1', type: 'paragraph', text: '你好', attrs: {} }],
   12 |     created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
   13 |   },
@@ -94,7 +94,7 @@ Received: 1
   23 |   await page.route('**/api/articles/7', async r => {
   24 |     if (r.request().method() === 'PUT') {
   25 |       savedBodies.push(r.request().postDataJSON());
-  26 |       return r.fulfill({ json: { ok: true } });
+  26 |       return r.fulfill({ json: { ok: true, article_id: 7, version: 2, blocks_hash: 'h' } });
   27 |     }
   28 |     return r.fulfill({ json: MOCK.article });
   29 |   });

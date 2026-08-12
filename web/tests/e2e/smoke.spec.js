@@ -7,7 +7,7 @@ const MOCK = {
   projects: [{ id: 1, name: '随笔' }],
   articles: [{ id: 7, title: '第一篇', updated_at: '2026-01-01T00:00:00' }],
   article: {
-    id: 7, project_id: 1, title: '第一篇',
+    id: 7, project_id: 1, title: '第一篇', version: 1,
     blocks: [{ id: 'b1', type: 'paragraph', text: '你好', attrs: {} }],
     created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
   },
@@ -23,7 +23,7 @@ test('打开草稿、编辑并自动保存', async ({ page }) => {
   await page.route('**/api/articles/7', async r => {
     if (r.request().method() === 'PUT') {
       savedBodies.push(r.request().postDataJSON());
-      return r.fulfill({ json: { ok: true } });
+      return r.fulfill({ json: { ok: true, article_id: 7, version: 2, blocks_hash: 'h' } });
     }
     return r.fulfill({ json: MOCK.article });
   });

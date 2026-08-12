@@ -8,6 +8,7 @@ let expanded = {};          // pid -> bool
 let currentAid = null;      // 当前打开草稿 id
 let currentPid = null;
 let saveTimer = null;
+let currentVersion = 1;   // 当前草稿的服务端版本（乐观锁）
 
 function toast_(m) {
   toast.textContent = m;
@@ -97,8 +98,11 @@ function inlineName(placeholder, cb) {
 /* ---------- 中间区：Block 编辑器 ---------- */
 function openArticle(aid) {
   currentAid = aid;
+  // 切稿前清掉旧稿的待保存 timer，防止旧内容写到新稿
+  clearTimeout(saveTimer);
   api(`/api/articles/${aid}`).then(a => {
     currentPid = a.project_id;
+    currentVersion = a.version || 1;
     $('#empty').style.display = 'none';
     const art = $('#article');
     art.classList.add('show');
@@ -177,13 +181,24 @@ function scheduleSave() {
   saveTimer = setTimeout(saveNow, 1200);
 }
 
-async function saveNow() {
+async function saveNow(reason = 'autosave') {
   if (!currentAid) return;
   try {
-    await api(`/api/articles/${currentAid}`, {
+    const resp = await fetch(`/api/articles/${currentAid}`, {
       method: 'PUT',
-      body: JSON.stringify({ blocks: collectBlocks() }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: collectBlocks(), base_version: currentVersion, change_reason: reason }),
     });
+    if (resp.status === 409) {
+      const d = await resp.json().catch(() => ({}));
+      toast_('保存冲突：服务器内容已变化，已保留服务器版本');
+      currentVersion = (d.detail && d.detail.current_version) || currentVersion;
+      openArticle(currentAid); // 最小处理：重载服务端（完整双份保留在 v0.3）
+      return;
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const d = await resp.json();
+    currentVersion = d.version;
   } catch (e) {
     toast_('保存失败：' + e.message);
   }
@@ -343,7 +358,7 @@ async function runRewrite(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
-      scheduleSave();
+      saveNow('ai_rewrite');
       toast_('已接受，改动已保存');
     };
   } catch (e) {
@@ -489,7 +504,7 @@ async function runCheck(target) {
       target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
       setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
       card.remove();
-      scheduleSave();
+      saveNow('ai_check');
       toast_('已按建议修订');
     };
   } catch (e) {

@@ -35,6 +35,8 @@ class ArticleIn(BaseModel):
 class ArticleUpdate(BaseModel):
     title: str | None = None
     blocks: list | None = None
+    base_version: int  # 乐观锁：客户端已知的服务端版本
+    change_reason: str = "autosave"
 
 
 class SettingsIn(BaseModel):
@@ -116,7 +118,10 @@ def api_create_article(pid: int, body: ArticleIn):
         raise HTTPException(400, "草稿标题不能为空")
     conn = _conn()
     try:
-        return {"id": db.create_article(conn, pid, title), "title": title}
+        try:
+            return {"id": db.create_article(conn, pid, title), "title": title}
+        except db.NotFoundError:
+            raise HTTPException(404, "项目不存在")
     finally:
         conn.close()
 
@@ -137,11 +142,27 @@ def api_get_article(aid: int):
 def api_save_article(aid: int, body: ArticleUpdate):
     conn = _conn()
     try:
-        if body.title is not None and body.title.strip():
-            db.update_article_title(conn, aid, body.title.strip())
-        if body.blocks is not None:
-            db.save_article_blocks(conn, aid, body.blocks)
-        return {"ok": True}
+        try:
+            version = db.save_article(
+                conn, aid, body.title, body.blocks,
+                base_version=body.base_version, reason=body.change_reason,
+            )
+        except db.NotFoundError:
+            raise HTTPException(404, "草稿不存在")
+        except db.VersionConflict as e:
+            art = db.get_article(conn, aid)
+            raise HTTPException(409, {
+                "code": "version_conflict",
+                "current_version": e.current_version,
+                "blocks": art["blocks"] if art else [],
+                "blocks_hash": art["blocks_hash"] if art else "",
+            })
+        return {
+            "ok": True,
+            "article_id": aid,
+            "version": version,
+            "blocks_hash": db.blocks_hash(body.blocks or []),
+        }
     finally:
         conn.close()
 
