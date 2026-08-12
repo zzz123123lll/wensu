@@ -192,15 +192,6 @@ export function showConflict(aid, serverVersion) {
   $('#conflict-server').onclick = () => location.reload();
 }
 
-function renderBlocks(blocks) {
-  $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
-    blocks.map(b => {
-      if (b.type === 'heading') return `<h2 class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</h2>`;
-      if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
-      return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
-    }).join('');
-}
-
 export function collectBlocks() {
   return Array.from(document.querySelectorAll('#article .blk.edit')).map(d => ({
     id: d.dataset.bid, // 稳定 ID（Enter 时已生成 UUID；旧数据保留原 ID）
@@ -208,4 +199,32 @@ export function collectBlocks() {
     text: d.textContent,
     attrs: {},
   }));
+}
+
+/* ---------- 撤销栈（每草稿；AI 应用/版本恢复前入栈，Ctrl+Z 出栈） ---------- */
+const undoStacks = new Map();  // aid -> [{blocks}]
+
+export function pushUndo(aid) {
+  if (!aid) return;
+  const st = undoStacks.get(aid) || [];
+  st.push({ blocks: collectBlocks(), ts: Date.now() });
+  if (st.length > 50) st.shift();
+  undoStacks.set(aid, st);
+}
+
+export function popUndo(aid) {
+  const st = undoStacks.get(aid);
+  if (!st || !st.length) return null;
+  const item = st.pop();
+  if (!st.length) undoStacks.delete(aid);
+  return item.blocks;
+}
+
+export function renderBlocks(blocks) {
+  $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
+    blocks.map(b => {
+      if (b.type === 'heading') return `<h2 class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</h2>`;
+      if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
+      return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
+    }).join('');
 }

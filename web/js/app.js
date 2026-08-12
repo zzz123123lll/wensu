@@ -2,7 +2,7 @@
 'use strict';
 
 import { api } from './api.js';
-import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks } from './state.js';
+import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks, pushUndo, popUndo, renderBlocks } from './state.js';
 import { escapeHtml, safeUrl } from './security.js';
 
 let projects = [];          // [{id, name}]
@@ -218,6 +218,23 @@ $('#btn-new-proj').addEventListener('click', () => {
 
 $('#btn-fold').addEventListener('click', () => $('#sidebar').classList.toggle('collapsed'));
 
+/* 全局撤销（焦点可在正文外）：AI 应用/版本恢复前已入栈（WEN-023） */
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey && !composing && !e.isComposing) {
+    e.preventDefault();
+    const prev = popUndo(currentAid);
+    if (prev) {
+      renderBlocks(prev);
+      renderCitationBadges();
+      markDirty(currentAid);
+      saveNow(currentAid);
+      toast_('已撤销');
+    } else {
+      toast_('没有可撤销的操作');
+    }
+  }
+});
+
 /* ========== 模型设置 ========== */
 let cfg = { configured: false, base_url: '', model: '' };
 
@@ -383,13 +400,18 @@ async function runRewrite(target) {
       + '<div class="acts"><button class="btn btn-g" data-x="rej">拒绝</button><button class="btn btn-p" data-x="acc">接受方案一</button></div>';
     card.querySelector('[data-x="rej"]').onclick = () => card.remove();
     card.querySelector('[data-x="acc"]').onclick = () => {
+      pushUndo(currentAid); // 可撤销点（WEN-023）
       const newText = r.candidates[0].text;
-      target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
-      setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
+      if (sel && sel.start_utf16 !== undefined) {
+        applySelectionToBlock(target, sel, newText); // 精确替换选中文字
+      } else {
+        target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
+        setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
+      }
       card.remove();
       markDirty(currentAid); // 改动标记（AI reason 保存）
       saveNow(currentAid, 'ai_rewrite');
-      toast_('已接受，改动已保存');
+      toast_('已接受（⌘Z 可撤销）');
     };
   } catch (e) {
     card.innerHTML = '<div class="ai-head">改写失败：' + escapeHtml(e.message) + '</div>';
@@ -494,12 +516,34 @@ async function showHistory() {
     $('#hist-close').onclick = () => card.remove();
     card.querySelectorAll('[data-x="restore"]').forEach(b => b.onclick = async () => {
       if (!confirm(`恢复到 v${b.dataset.v}？（当前内容会保留为历史）`)) return;
+      pushUndo(currentAid); // 可撤销点（WEN-023）
       await api(`/api/articles/${currentAid}/revisions/${b.dataset.v}/restore`, { method: 'POST' });
       card.remove();
       openArticle(currentAid);
       toast_('已恢复到 v' + b.dataset.v);
     });
   } catch (e) { toast_('历史加载失败：' + e.message); }
+}
+
+/* 精确选区替换：只替换选中文字（UTF-16 偏移），其余保留 */
+function applySelectionToBlock(block, sel, newText) {
+  const raw = block.textContent;
+  block.textContent = raw; // 归一为单文本节点（旧内容含 mark 包装时）
+  const node = block.firstChild;
+  const start = Math.min(sel.start_utf16, raw.length);
+  const end = Math.min(sel.end_utf16, raw.length);
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  range.deleteContents();
+  range.insertNode(document.createTextNode(newText));
+  // 光标移到插入后
+  const s = window.getSelection();
+  s.removeAllRanges();
+  const r2 = document.createRange();
+  r2.setStart(node, Math.min(start + newText.length, node.textContent.length));
+  r2.collapse(true);
+  s.addRange(r2);
 }
 
 /* 引用编号渲染：由文章 citations 计算，badge 不写入正文（保存时无 [N] 污染） */
@@ -659,12 +703,17 @@ async function runCheck(target) {
     card.querySelector('[data-x="rej"]').onclick = () => card.remove();
     const acc = card.querySelector('[data-x="acc"]');
     if (acc) acc.onclick = () => {
-      target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
-      setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
+      pushUndo(currentAid); // 可撤销点（WEN-023）
+      if (sel && sel.start_utf16 !== undefined) {
+        applySelectionToBlock(target, sel, r.suggestion); // 精确替换选中文字
+      } else {
+        target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
+        setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
+      }
       card.remove();
       markDirty(currentAid); // 改动标记（AI reason 保存）
       saveNow(currentAid, 'ai_check');
-      toast_('已按建议修订');
+      toast_('已按建议修订（⌘Z 可撤销）');
     };
   } catch (e) {
     clearTimeout(timer);
