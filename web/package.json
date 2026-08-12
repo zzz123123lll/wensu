@@ -1,0 +1,16 @@
+{
+  "name": "wensu-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "文序 · 正式前端（原生 ES Modules）",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "vitest": "^3.2.0"
+  }
+}
