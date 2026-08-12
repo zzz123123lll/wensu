@@ -94,7 +94,11 @@ function inlineName(placeholder, cb) {
 }
 
 /* ---------- 中间区：Block 编辑器 ---------- */
+let articleReqSeq = 0;  // 打开文章请求序号：迟到的响应不得覆盖新稿
+let insightAbort = null; // 洞察请求取消句柄
+
 function openArticle(aid) {
+  const seq = ++articleReqSeq;
   // 切稿前 flush 旧稿：清 timer + 立即保存旧稿（per-aid 状态，不会写错稿）
   if (currentAid && currentAid !== aid) {
     clearTimeout(saveTimer);
@@ -103,6 +107,7 @@ function openArticle(aid) {
   }
   currentAid = aid;
   api(`/api/articles/${aid}`).then(a => {
+    if (seq !== articleReqSeq) return; // 迟到的旧稿响应丢弃
     currentPid = a.project_id;
     sstate(aid).baseVersion = a.version || 1;
     $('#empty').style.display = 'none';
@@ -122,7 +127,7 @@ function openArticle(aid) {
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     $('#doc-scroll').scrollTop = 0;
-    loadInsight(aid);
+    showInsightIdle(); // 默认不自动调用模型（WEN-009 安全默认）
   }).catch(e => toast_('打开失败：' + e.message));
 }
 
@@ -524,21 +529,49 @@ async function runRewrite(target) {
 }
 $('#tool-rw').addEventListener('click', () => runRewrite(anchorFromSel()));
 
-/* ========== 洞察链路 ========== */
+/* ========== 洞察链路（手动触发，安全默认：打开草稿不自动调用模型） ========== */
+function showInsightIdle() {
+  const was = $('#cardflow').innerHTML;
+  $('#cardflow').innerHTML = `
+    <div class="insight">
+      <div class="ins-head"><span class="ins-ic">◎</span><span class="ins-t">当前洞察</span></div>
+      <div class="ins-row"><span class="v" style="width:auto">AI 理解这篇文章，需要把正文发送给模型。点下面按钮手动生成。</span></div>
+      <div class="acts"><button class="btn btn-p" id="btn-insight">生成洞察</button></div>
+    </div>`;
+  $('#btn-insight').addEventListener('click', () => loadInsight(currentAid));
+}
+
 async function loadInsight(aid) {
+  if (insightAbort) insightAbort.abort();
+  const abort = new AbortController();
+  insightAbort = abort;
+  const seq = articleReqSeq;
   if (!cfg.configured) {
-    $('#cardflow').innerHTML = `
-      <div class="insight">
-        <div class="ins-head"><span class="ins-ic">◎</span><span class="ins-t">写作助手</span><span class="ins-badge">未启用</span></div>
-        <div class="ins-row"><span class="v" style="width:auto">先在右上角 ⚙ 设置你的 API Key 和模型，AI 建议就会出现在这里。</span></div>
-      </div>`;
+    toast_('请先在设置里配置模型');
     return;
   }
+  $('#cardflow').innerHTML = `
+    <div class="insight">
+      <div class="ins-head"><span class="ins-ic">◎</span><span class="ins-t">当前洞察</span><span class="ins-badge">AI 正在读</span></div>
+      <div class="ins-row"><span class="v" style="width:auto">正在分析这篇文章…</span></div>
+    </div>`;
   try {
     const a = await api(`/api/articles/${aid}`);
-    const r = await api('/api/ai/insight', { method: 'POST', body: JSON.stringify({ title: a.title, blocks: a.blocks }) });
-    renderInsight(r);
+    if (seq !== articleReqSeq) return; // 已切稿
+    const resp = await fetch('/api/ai/insight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: a.title, blocks: a.blocks }),
+      signal: abort.signal,
+    });
+    if (seq !== articleReqSeq) return;
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      throw new Error(e.detail || ('HTTP ' + resp.status));
+    }
+    renderInsight(await resp.json());
   } catch (e) {
+    if (e.name === 'AbortError' || seq !== articleReqSeq) return; // 取消/切稿：静默
     $('#cardflow').innerHTML = `<div class="insight"><div class="ins-head"><span class="ins-t">洞察</span></div><div class="ins-row"><span class="v" style="width:auto">${escapeHtml(e.message)}</span></div></div>`;
   }
 }
