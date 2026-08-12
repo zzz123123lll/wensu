@@ -5,7 +5,7 @@ from app import db, main
 
 def test_full_flow(tmp_path):
     db.DB_PATH = str(tmp_path / "t.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     r = client.post("/api/projects", json={"name": "随笔"})
     assert r.status_code == 200
     pid = r.json()["id"]
@@ -22,7 +22,7 @@ def test_full_flow(tmp_path):
 
 def test_list_projects_and_articles(tmp_path):
     db.DB_PATH = str(tmp_path / "t2.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p1"}).json()["id"]
     client.post(f"/api/projects/{pid}/articles", json={"title": "a1"})
     assert len(client.get("/api/projects").json()) == 1
@@ -31,13 +31,13 @@ def test_list_projects_and_articles(tmp_path):
 
 def test_get_missing_article_404(tmp_path):
     db.DB_PATH = str(tmp_path / "t3.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     assert client.get("/api/articles/999").status_code == 404
 
 
 def test_update_title(tmp_path):
     db.DB_PATH = str(tmp_path / "t4.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "旧"}).json()["id"]
     assert client.put(f"/api/articles/{aid}", json={"title": "新", "base_version": 1}).status_code == 200
@@ -46,7 +46,7 @@ def test_update_title(tmp_path):
 
 def test_put_missing_base_version_422(tmp_path):
     db.DB_PATH = str(tmp_path / "t7.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     r = client.put(f"/api/articles/{aid}", json={"blocks": []})
@@ -55,7 +55,7 @@ def test_put_missing_base_version_422(tmp_path):
 
 def test_put_version_conflict_409(tmp_path):
     db.DB_PATH = str(tmp_path / "t8.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     # 第一次保存 → version 2
@@ -72,21 +72,21 @@ def test_put_version_conflict_409(tmp_path):
 
 def test_put_missing_article_404(tmp_path):
     db.DB_PATH = str(tmp_path / "t9.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     r = client.put("/api/articles/999", json={"blocks": [], "base_version": 1})
     assert r.status_code == 404
 
 
 def test_create_article_orphan_rejected(tmp_path):
     db.DB_PATH = str(tmp_path / "t10.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     r = client.post("/api/projects/999/articles", json={"title": "孤儿"})
     assert r.status_code == 404
 
 
 def test_ai_rewrite_creates_revision(tmp_path):
     db.DB_PATH = str(tmp_path / "t11.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     blocks = [{"id": "b1", "type": "paragraph", "text": "原文", "attrs": {}}]
@@ -101,7 +101,7 @@ def test_ai_rewrite_creates_revision(tmp_path):
 
 def test_autosave_does_not_create_revision(tmp_path):
     db.DB_PATH = str(tmp_path / "t12.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     r = client.put(f"/api/articles/{aid}", json={"blocks": [], "base_version": 1, "change_reason": "autosave"})
@@ -114,7 +114,7 @@ def test_autosave_does_not_create_revision(tmp_path):
 
 def test_put_illegal_block_type_422(tmp_path):
     db.DB_PATH = str(tmp_path / "t13.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     r = client.put(f"/api/articles/{aid}", json={
@@ -126,7 +126,7 @@ def test_put_illegal_block_type_422(tmp_path):
 
 def test_put_illegal_block_id_422(tmp_path):
     db.DB_PATH = str(tmp_path / "t14.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     r = client.put(f"/api/articles/{aid}", json={
@@ -139,7 +139,7 @@ def test_put_illegal_block_id_422(tmp_path):
 def test_put_old_style_ids_ok(tmp_path):
     """旧 ID（b1 / b<ts>-<i>）不受破坏。"""
     db.DB_PATH = str(tmp_path / "t15.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     pid = client.post("/api/projects", json={"name": "p"}).json()["id"]
     aid = client.post(f"/api/projects/{pid}/articles", json={"title": "t"}).json()["id"]
     blocks = [
@@ -154,7 +154,7 @@ def test_put_old_style_ids_ok(tmp_path):
 
 def test_health(tmp_path):
     db.DB_PATH = str(tmp_path / "t5.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
     r = client.get("/api/health")
     assert r.status_code == 200
     body = r.json()
@@ -164,7 +164,7 @@ def test_health(tmp_path):
 
 def test_health_db_error(tmp_path, monkeypatch):
     db.DB_PATH = str(tmp_path / "t6.db")
-    client = TestClient(main.app)
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
 
     def boom():
         raise OSError("db 不可用")
@@ -172,3 +172,41 @@ def test_health_db_error(tmp_path, monkeypatch):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["db"] == "error"
+
+
+# ---------- 安全守卫 ----------
+
+def test_cross_origin_write_rejected(tmp_path):
+    db.DB_PATH = str(tmp_path / "t16.db")
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
+    r = client.post("/api/projects", json={"name": "x"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert "cross-origin" in r.json()["detail"]
+
+
+def test_cross_origin_ai_rejected(tmp_path):
+    db.DB_PATH = str(tmp_path / "t17.db")
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
+    r = client.post("/api/ai/ask", json={"prompt": "x"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+
+
+def test_local_origin_allowed(tmp_path):
+    db.DB_PATH = str(tmp_path / "t18.db")
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
+    r = client.post("/api/projects", json={"name": "本地源"}, headers={"origin": "http://127.0.0.1:8766"})
+    assert r.status_code == 200
+
+
+def test_invalid_host_rejected(tmp_path):
+    db.DB_PATH = str(tmp_path / "t19.db")
+    client = TestClient(main.app, base_url="http://attacker.example")
+    r = client.get("/api/health")
+    assert r.status_code == 403
+    assert r.json()["detail"] == "invalid host"
+
+
+def test_read_requests_no_origin_ok(tmp_path):
+    db.DB_PATH = str(tmp_path / "t20.db")
+    client = TestClient(main.app, base_url="http://127.0.0.1:8766")
+    assert client.get("/api/projects").status_code == 200  # GET 不受 Origin 限制

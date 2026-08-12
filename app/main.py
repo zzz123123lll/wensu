@@ -4,6 +4,7 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -16,10 +17,29 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 app = FastAPI(title="文序", version="0.1.0")
 
+# 本机绑定服务：只允许本地源（防恶意网页跨源调用本机 API）
+ALLOWED_ORIGINS = {"http://localhost:8766", "http://127.0.0.1:8766"}
+ALLOWED_HOSTS = {"127.0.0.1:8766", "localhost:8766"}
+
+
+@app.middleware("http")
+async def security_guard(request, call_next):
+    # Host 校验（防 DNS rebinding / 伪造 Host）
+    host = request.headers.get("host", "")
+    if host not in ALLOWED_HOSTS:
+        return JSONResponse({"detail": "invalid host"}, status_code=403)
+    # 写请求与 AI API：Origin 校验（无 Origin 的同源/非浏览器请求放行）
+    if request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
+    return await call_next(request)
+
+
 # 原型阶段允许跨源（prototype 独立端口调试用；上线前收紧）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -182,7 +202,10 @@ def api_get_settings():
 def api_save_settings(body: SettingsIn):
     conn = _conn()
     try:
-        settings.save_settings(conn, body.base_url, body.model, body.api_key)
+        try:
+            settings.save_settings(conn, body.base_url, body.model, body.api_key)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         return {"ok": True}
     finally:
         conn.close()

@@ -39,7 +39,7 @@ function renderSide() {
     const open = !!expanded[p.id];
     return `
       <div class="proj ${open ? 'open' : ''}" data-pid="${p.id}">
-        <span class="arr">▶</span><span>${p.name}</span><span class="cnt" data-cnt="${p.id}"></span>
+        <span class="arr">▶</span><span>${escapeHtml(p.name)}</span><span class="cnt" data-cnt="${p.id}"></span>
       </div>
       <div class="doc sub newdraft" data-pid="${p.id}" data-new="1" style="display:${open ? '' : 'none'}">＋ 新建草稿</div>
       <div class="docs-${p.id}" style="display:${open ? '' : 'none'}"></div>
@@ -626,6 +626,14 @@ function renderInsight(r) {
   }));
 }
 
+/* 安全 URL：只允许 http/https */
+function safeUrl(u) {
+  try {
+    const p = new URL(u, window.location.origin);
+    return (p.protocol === 'http:' || p.protocol === 'https:') ? p.href : '';
+  } catch { return ''; }
+}
+
 /* ========== 搜索链路（真搜索：Wikipedia / DuckDuckGo，降级模型知识） ========== */
 async function runSearch(target) {
   target = target || firstBlock();
@@ -658,7 +666,7 @@ async function runSearch(target) {
         <div class="t">${escapeHtml(res.title)} <span class="src ${res.source === 'web' ? 'web' : ''}">${res.source === 'web' ? '已检索' : '模型知识'}</span></div>
         <div class="sn">${escapeHtml(res.snippet)}</div>
         <div class="res-acts"><button class="mini2" data-x="cite">引用</button>
-        ${res.url ? `<a class="mini2 link" href="${escapeHtml(res.url)}" target="_blank" rel="noopener">打开</a>` : ''}</div>
+        ${(res.url && safeUrl(res.url)) ? `<a class="mini2 link" href="${escapeHtml(safeUrl(res.url))}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}</div>
       </div>`).join('');
     card.querySelectorAll('[data-x="cite"]').forEach((b, i) => b.onclick = () => {
       const sup = document.createElement('sup');

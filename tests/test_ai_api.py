@@ -8,7 +8,7 @@ from app.llm import LLMError
 
 def _client(tmp_path):
     db.DB_PATH = str(tmp_path / "ai.db")
-    return TestClient(main.app)
+    return TestClient(main.app, base_url="http://127.0.0.1:8766")
 
 
 def test_ask_requires_config(tmp_path):

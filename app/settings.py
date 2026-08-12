@@ -6,6 +6,7 @@ _encrypt/_decrypt 可注入（测试用假实现），生产默认 DPAPI。
 
 import ctypes
 import sys
+from urllib.parse import urlparse
 from ctypes import wintypes
 
 _DPAPI_AVAILABLE = sys.platform == "win32"
@@ -67,19 +68,52 @@ def _row(conn):
     return conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
 
 
+def _origin(url: str) -> str:
+    try:
+        p = urlparse(url.strip())
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}"
+    except ValueError:
+        pass
+    return ""
+
+
+def _validate_base_url(base_url: str) -> None:
+    """custom endpoint 校验：只允许 http/https；本地 http 仅限显式 localhost。"""
+    p = urlparse(base_url.strip())
+    if p.scheme not in ("http", "https") or not p.netloc:
+        raise ValueError("API 地址必须是合法的 http/https URL")
+    if p.scheme == "http" and p.hostname not in ("localhost", "127.0.0.1"):
+        raise ValueError("明文 http 仅允许本地地址（localhost/127.0.0.1）")
+
+
 def save_settings(conn, base_url: str, model: str, api_key: str | None = None) -> None:
     ensure_table(conn)
+    _validate_base_url(base_url)
+    row = _row(conn)
+    old_origin = _origin(row["base_url"]) if row else ""
+    new_origin = _origin(base_url)
+
     if api_key is not None and api_key.strip():
+        # 显式提供新 Key（含换 origin 后的重新授权）
         enc = _encrypt(api_key.strip().encode("utf-8"))
         conn.execute(
             "UPDATE settings SET base_url=?, model=?, api_key_enc=? WHERE id=1",
             (base_url.strip(), model.strip(), enc),
         )
     else:
-        conn.execute(
-            "UPDATE settings SET base_url=?, model=? WHERE id=1",
-            (base_url.strip(), model.strip()),
-        )
+        origin_changed = bool(old_origin and new_origin and old_origin != new_origin)
+        if origin_changed and row and row["api_key_enc"]:
+            # origin 变化：旧 Key 不得发送到新主机，强制清除
+            conn.execute(
+                "UPDATE settings SET base_url=?, model=?, api_key_enc=NULL WHERE id=1",
+                (base_url.strip(), model.strip()),
+            )
+        else:
+            conn.execute(
+                "UPDATE settings SET base_url=?, model=? WHERE id=1",
+                (base_url.strip(), model.strip()),
+            )
     conn.commit()
 
 
