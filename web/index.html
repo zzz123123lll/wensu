@@ -34,6 +34,10 @@
         </button>
       </div>
       <div class="side-inner" id="side-list"></div>
+      <button id="btn-materials" class="side-trash" title="素材库">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5h12v9H2zM2 6.5h12M5.5 3.5v3M10.5 3.5v3"/></svg>
+        <span>素材库</span>
+      </button>
       <button id="btn-trash" class="side-trash" title="回收站">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11M6.5 2.5h3M4 4.5l.7 9h6.6l.7-9M6.5 7v4M9.5 7v4"/></svg>
         <span>回收站</span>
@@ -59,6 +63,7 @@
         <div id="panel-head">
           <span class="pt">写作助手</span>
           <span class="pstatus" id="pstatus"><span class="pdot"></span><span id="pstatus-text">草稿</span></span>
+          <button id="btn-cites" class="mini2" title="当前草稿的引用清单" style="margin-left:auto">引用</button>
         </div>
         <div id="cardflow">
           <div class="insight">
@@ -72,6 +77,9 @@
           </div>
         </div>
         <div id="ask-mini">
+          <button id="ask-history-btn" class="dock-btn" title="问答历史" aria-label="问答历史">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h7"/></svg>
+          </button>
           <input id="ask-input" placeholder="问点什么…" autocomplete="off">
           <button id="ask-send">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
@@ -153,6 +161,22 @@
     <div class="modal-head"><span id="trash-title">回收站</span> <button id="trash-close" aria-label="关闭回收站">×</button></div>
     <div class="modal-hint">删除的草稿在这里，可恢复。恢复会回到原项目。</div>
     <div id="trash-list"></div>
+  </div>
+</div>
+
+<!-- 素材库弹层 -->
+<div id="materials-modal" class="modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="materials-title">
+  <div class="modal-card mat-card">
+    <div class="modal-head"><span id="materials-title">素材库</span> <button id="materials-close" aria-label="关闭素材库">×</button></div>
+    <div class="mat-tools">
+      <input id="mat-q" placeholder="搜索素材…" maxlength="50">
+      <button id="mat-scope-all" class="mini2 on">全部</button>
+      <button id="mat-scope-proj" class="mini2">本项目</button>
+    </div>
+    <div class="mat-filters">
+      <input id="mat-tag" placeholder="按标签筛选，如：数据" maxlength="12">
+    </div>
+    <div id="mat-list" class="mat-list"></div>
   </div>
 </div>
 

@@ -6,7 +6,7 @@ import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks
 import { escapeHtml, safeUrl } from './security.js';
 
 // 供 review 等动态加载模块引用（ES module 顶层声明是模块私有，须显式导出）
-export { toast_, openArticle };
+export { toast_, openArticle, runSearch };
 export let currentAid = null;      // 当前打开草稿 id
 
 let projects = [];          // [{id, name}]
@@ -148,7 +148,33 @@ function openArticle(aid) {
     resetWriteObserver(); // 写作在场观察随草稿重置
     reportSignal('draft_open', { blocks_count: a.blocks.length }); // Phase 6 信号
     loadSuggestions(); // 规则建议（无模型也可用）
+    showContinueCard(); // 方案 E：继续写入口
   }).catch(e => toast_('打开失败：' + e.message));
+}
+
+/* 方案 E：继续写入口——上次位置 / 最近素材 / 待处理检查 */
+async function showContinueCard() {
+  if (!currentAid) return;
+  try {
+    const r = await api(`/api/articles/${currentAid}/continue`);
+    const parts = [];
+    if (r.last_edited) parts.push('上次编辑 ' + String(r.last_edited).slice(5, 16).replace('T', ' '));
+    if (r.pending_review > 0) parts.push(`待处理检查 ${r.pending_review} 项`);
+    if (!r.recent_materials.length) parts.push('还没有素材');
+    const matsHtml = (r.recent_materials || []).map(m =>
+      `<button class="mini2" data-mid="${m.id}" style="margin:2px">${escapeHtml((m.title || '').slice(0, 14))}</button>`).join('');
+    const card = document.createElement('div');
+    card.className = 'insight continue-card';
+    card.innerHTML = `
+      <div class="ins-head"><span class="ins-t">继续写</span></div>
+      <div class="ins-row"><span class="v">${escapeHtml(parts.join(' · ') || '新草稿')}</span></div>
+      ${matsHtml ? `<div class="res-acts">${matsHtml}</div>` : ''}`;
+    $('#cardflow').prepend(card);
+    card.querySelectorAll('[data-mid]').forEach(b => b.onclick = () => {
+      card.remove();
+      insertMaterial(+b.dataset.mid);
+    });
+  } catch { /* 继续写卡失败不打扰 */ }
 }
 
 function blockHtml(b) {
@@ -403,7 +429,144 @@ function closeSettings() { $('#settings-modal').style.display = 'none'; }
 $('#btn-settings').addEventListener('click', openSettings);
 $('#modal-close').addEventListener('click', closeSettings);
 
-/* ---------- 回收站（dogfood Bug#8：可恢复承诺要有 UI 兑现） ---------- */
+/* ---------- 素材库（进化方案 工作包A） ---------- */
+let matScope = 'all'; // all | proj
+
+$('#btn-materials').addEventListener('click', openMaterials);
+$('#materials-close').addEventListener('click', () => { $('#materials-modal').style.display = 'none'; });
+$('#mat-q').addEventListener('input', debounce(loadMaterials, 300));
+$('#mat-tag').addEventListener('input', debounce(loadMaterials, 300));
+$('#mat-scope-all').addEventListener('click', () => { matScope = 'all'; refreshMatScope(); loadMaterials(); });
+$('#mat-scope-proj').addEventListener('click', () => { matScope = 'proj'; refreshMatScope(); loadMaterials(); });
+
+function refreshMatScope() {
+  $('#mat-scope-all').classList.toggle('on', matScope === 'all');
+  $('#mat-scope-proj').classList.toggle('on', matScope === 'proj');
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+async function loadMaterials() {
+  const list = $('#mat-list');
+  const q = encodeURIComponent($('#mat-q').value.trim());
+  const tag = encodeURIComponent($('#mat-tag').value.trim());
+  const proj = matScope === 'proj' && currentAid ? `&project_id=${currentProjectId()}` : '';
+  try {
+    const r = await api(`/api/materials?q=${q}&tag=${tag}${proj}`);
+    if (!r.materials.length) {
+      list.innerHTML = '<div class="modal-hint">还没有素材。搜索时点「存入素材」，或对 Ask 回答点「保存为素材」。</div>';
+      return;
+    }
+    list.innerHTML = r.materials.map(m => `
+      <div class="mat-item" data-mid="${m.id}">
+        <div class="mat-top">
+          <span class="mat-title">${escapeHtml(m.title || '（无标题）')}</span>
+          ${(m.tags || []).map(t => `<span class="mat-tag">${escapeHtml(t)}</span>`).join('')}
+        </div>
+        <div class="mat-src">${m.source_title ? escapeHtml(m.source_title) : '本地记录'}${m.url ? ' · <span class="hint">' + escapeHtml(m.url.slice(0, 48)) + '</span>' : ''}</div>
+        <div class="mat-content">${escapeHtml((m.content || '').slice(0, 140))}</div>
+        <div class="res-acts">
+          <button class="mini2" data-x="insert">插入正文</button>
+          <button class="mini2" data-x="copy">复制</button>
+          <button class="mini2" data-x="tag">改标签</button>
+          <button class="mini2" data-x="del">删除</button>
+        </div>
+      </div>`).join('');
+    bindMaterialActions();
+  } catch (e) {
+    list.innerHTML = '<div class="modal-hint">加载失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function bindMaterialActions() {
+  document.querySelectorAll('.mat-item').forEach(item => {
+    const mid = +item.dataset.mid;
+    item.querySelector('[data-x="insert"]').onclick = () => insertMaterial(mid);
+    item.querySelector('[data-x="copy"]').onclick = async () => {
+      try {
+        const r = await api(`/api/materials/${mid}`);
+        if (r.material) { await navigator.clipboard.writeText(r.material.content || r.material.title); toast_('已复制'); }
+      } catch { toast_('复制失败'); }
+    };
+    item.querySelector('[data-x="tag"]').onclick = () => editMaterialTags(mid, item);
+    item.querySelector('[data-x="del"]').onclick = () => deleteMaterial(mid);
+  });
+}
+
+async function editMaterialTags(mid, item) {
+  const tags = prompt('标签（逗号分隔）：', (item.querySelectorAll('.mat-tag') ? Array.from(item.querySelectorAll('.mat-tag')).map(t => t.textContent).join(',') : ''));
+  if (tags === null) return;
+  const list = tags.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+  try {
+    const r = await api(`/api/materials/${mid}`);
+    const m = r.material;
+    await api(`/api/materials/${mid}`, { method: 'PATCH', body: JSON.stringify({ title: m.title, content: m.content, tags: list }) });
+    toast_('标签已更新');
+    loadMaterials();
+  } catch (e) { toast_('更新失败：' + e.message); }
+}
+
+async function deleteMaterial(mid) {
+  try {
+    const usage = await api(`/api/materials/${mid}/usage`);
+    if (usage.citations && usage.citations.length) {
+      const names = usage.citations.slice(0, 3).map(c => c.article_title || '草稿').join('、');
+      const unlink = confirm(`这个素材被 ${usage.citations.length} 处引用（${names}…）。\n只解除关系（正文引用保留）？`);
+      if (unlink) {
+        await api(`/api/materials/${mid}?unlink_only=1`, { method: 'DELETE' });
+        toast_('已解除关系，正文不受影响');
+      }
+      return;
+    }
+    if (!confirm('删除这个素材？')) return;
+    await api(`/api/materials/${mid}`, { method: 'DELETE' });
+    toast_('已删除');
+    loadMaterials();
+  } catch (e) { toast_('删除失败：' + e.message); }
+}
+
+async function insertMaterial(mid) {
+  if (!currentAid) { toast_('先打开一篇草稿再插入'); return; }
+  try {
+    const r = await api(`/api/materials/${mid}`);
+    const m = r.material;
+    if (!m) { toast_('素材不存在'); return; }
+    const block = document.querySelector('#article .blk.edit');
+    if (!block) { toast_('先打开草稿'); return; }
+    // 素材插入正文：走统一 Revision 管道（方案 D：插入=受控修改，可撤销可恢复）
+    pushUndo(currentAid);
+    const insertText = m.content || m.title;
+    if (block.textContent.trim()) {
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      range.collapse(false);
+      range.insertNode(document.createTextNode('\n' + insertText));
+    } else {
+      block.textContent = insertText;
+    }
+    block.dispatchEvent(new Event('input', { bubbles: true }));
+    markDirty(currentAid);
+    saveNow(currentAid, 'material_insert');
+    toast_('已插入正文（可 Ctrl+Z 撤销）');
+  } catch (e) { toast_('插入失败：' + e.message); }
+}
+
+function currentProjectId() {
+  const doc = document.querySelector('.doc[data-aid].active, .doc[data-aid]');
+  return doc ? +doc.dataset.pid : 0;
+}
+
+function openMaterials() {
+  $('#materials-modal').style.display = 'flex';
+  $('#mat-q').value = '';
+  $('#mat-tag').value = '';
+  matScope = 'all';
+  refreshMatScope();
+  loadMaterials();
+}
 $('#btn-trash').addEventListener('click', openTrash);
 $('#trash-close').addEventListener('click', () => { $('#trash-modal').style.display = 'none'; });
 
@@ -494,11 +657,22 @@ async function sendAsk() {
     busy.remove();
     // 回答卡：显示实际模型 + 「记住偏好」入口（作者记忆，透明可删）
     const card = addPanelCard('回答' + (r.model ? ' · ' + escapeHtml(r.model) : ''), r.reply, { model: r.model });
+    const acts = document.createElement('div');
+    acts.className = 'res-acts';
+    acts.style.marginTop = '6px';
+    // 方案 B：动作名固定——「保存为素材」「插入正文」，不出现含糊的「保存」
+    const saveMat = document.createElement('button');
+    saveMat.className = 'mini2';
+    saveMat.textContent = '保存为素材';
+    saveMat.onclick = () => saveAskAsMaterial(r, t);
+    const insertBody = document.createElement('button');
+    insertBody.className = 'mini2';
+    insertBody.textContent = '插入正文';
+    insertBody.onclick = () => insertAskToBody(r, t);
     const remember = document.createElement('button');
     remember.className = 'mini2';
     remember.textContent = '记住偏好';
     remember.title = '把这条回答里的写作偏好存进记忆（设置中可删）';
-    remember.style.marginTop = '6px';
     remember.onclick = () => {
       const key = prompt('偏好名（如：文风）');
       if (!key) return;
@@ -506,10 +680,71 @@ async function sendAsk() {
       if (!content) return;
       api('/api/prefs', { method: 'POST', body: JSON.stringify({ key, content }) }).then(() => toast_('已记住，Ask 时会自动参考')).catch(e => toast_('保存失败：' + e.message));
     };
-    card.appendChild(remember);
+    acts.append(saveMat, insertBody, remember);
+    card.appendChild(acts);
   } catch (e) {
     busy.remove();
     addPanelCard('出错', e.message);
+  }
+}
+
+/* 方案 B：Ask 回答 → 素材（无来源不生成引用；标记 usage） */
+async function saveAskAsMaterial(r, promptText) {
+  if (!currentAid) { toast_('先打开草稿'); return; }
+  try {
+    const pid = currentProjectId();
+    const title = promptText.slice(0, 30) || 'Ask 记录';
+    const res = await api(`/api/projects/${pid}/materials`, {
+      method: 'POST',
+      body: JSON.stringify({ title, content: r.reply, tags: ['ask'] }),
+    });
+    if (r.ask_id) api(`/api/asks/${r.ask_id}/usage`, { method: 'POST', body: JSON.stringify({ usage: 'saved_as_material' }) }).catch(() => {});
+    toast_('已保存为素材（无来源，未生成引用）');
+  } catch (e) { toast_('保存失败：' + e.message); }
+}
+
+/* 方案 B+D：Ask 回答 → 正文（走统一 Revision 管道） */
+async function insertAskToBody(r, promptText) {
+  if (!currentAid) { toast_('先打开草稿'); return; }
+  const block = document.querySelector('#article .blk.edit');
+  if (!block) { toast_('先打开草稿'); return; }
+  pushUndo(currentAid);
+  const insertText = r.reply.replace(/\*\*/g, '');
+  if (block.textContent.trim()) {
+    const range = document.createRange();
+    range.selectNodeContents(block);
+    range.collapse(false);
+    range.insertNode(document.createTextNode('\n' + insertText));
+  } else {
+    block.textContent = insertText;
+  }
+  block.dispatchEvent(new Event('input', { bubbles: true }));
+  markDirty(currentAid);
+  saveNow(currentAid, 'ask_insert');
+  if (r.ask_id) api(`/api/asks/${r.ask_id}/usage`, { method: 'POST', body: JSON.stringify({ usage: 'inserted_to_body' }) }).catch(() => {});
+  toast_('已插入正文（可 Ctrl+Z 撤销）');
+}
+
+/* 方案 B：Ask 历史时间轴（按草稿） */
+async function showAskHistory() {
+  if (!currentAid) { toast_('先打开草稿'); return; }
+  const card = addPanelCard('问答历史', '加载中…');
+  try {
+    const r = await api(`/api/articles/${currentAid}/asks`);
+    const history = r.asks || [];
+    if (!history.length) {
+      card.innerHTML = '<div class="ins-head"><span class="ins-t">问答历史</span></div><div class="ins-row"><span class="v">这个草稿还没有问答记录。</span></div>';
+      return;
+    }
+    card.innerHTML = '<div class="ins-head"><span class="ins-t">问答历史</span></div>' +
+      history.map(h => `
+        <div class="ask-hist">
+          <div class="ask-h-q">${escapeHtml(h.prompt.slice(0, 60))}</div>
+          <div class="ask-h-a">${escapeHtml(h.response.slice(0, 120))}${h.response.length > 120 ? '…' : ''}</div>
+          <div class="ask-h-meta">${escapeHtml((h.created_at || '').slice(0, 16).replace('T', ' '))} · ${escapeHtml(h.model || '')}${h.metadata && h.metadata.usage ? ' · 已' + (h.metadata.usage === 'saved_as_material' ? '存为素材' : '插入正文') : ''}</div>
+        </div>`).join('');
+  } catch (e) {
+    card.innerHTML = '<div class="ins-head"><span class="ins-t">问答历史</span></div><div class="ins-row"><span class="v">加载失败：' + escapeHtml(e.message) + '</span></div>';
   }
 }
 
@@ -654,7 +889,12 @@ async function runRewrite(target) {
       const newText = r.candidates[0].text;
       if (sel && sel.start_utf16 !== undefined) {
         // 句子边界扩展：候选可能改写整个句子，避免选区在句中替换后残留拼接（dogfood Bug#3）
+        const before = target.textContent;
         applySelectionToBlock(target, extendToSentence(target.textContent, sel), newText);
+        // 方案 D：修改可逆 + 差异可见——显示字级改动量
+        const after = target.textContent;
+        const d = charDiff(before, after);
+        if (d) toast_(`已改写：删 ${d.del} 字，增 ${d.add} 字（Ctrl+Z 可撤销）`);
       } else {
         target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
         setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
@@ -671,6 +911,7 @@ async function runRewrite(target) {
 $('#tool-rw').addEventListener('click', () => { reportSignal('tool_click', { tool: 'rewrite', focus: 'block' }); runRewrite(anchorFromSel()); });
 $('#ask-send').addEventListener('click', () => { reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 $('#ask-input').addEventListener('keydown', e => { if (e.key === 'Enter') reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
+$('#ask-history-btn').addEventListener('click', showAskHistory);
 
 /* ========== 洞察链路（手动触发，安全默认：打开草稿不自动调用模型） ========== */
 function showInsightIdle() {
@@ -845,6 +1086,16 @@ function onBlockEdited(block) {
   }, 30000);
 }
 
+/* 字级改动量统计（方案 D：修改差异可见） */
+function charDiff(before, after) {
+  const b = before.replace(/\s/g, '');
+  const a = after.replace(/\s/g, '');
+  const add = Math.max(0, a.length - b.length);
+  const del = Math.max(0, b.length - a.length);
+  if (!add && !del) return null;
+  return { add, del };
+}
+
 /* 精确选区替换：只替换选中文字（UTF-16 偏移），其余保留 */
 /* 接受 AI 改写前，把选区扩展至完整句子边界：候选改写整个句子时，选区在句中会导致替换后残留原文拼接（dogfood Bug#3） */
 function extendToSentence(raw, sel) {
@@ -883,6 +1134,75 @@ function applySelectionToBlock(block, sel, newText) {
   s.addRange(r2);
 }
 
+/* 方案 C：引用清单（按正文位置排序 + 核验状态 + 定位正文） */
+const VERIF_LABEL = {
+  pending: '待核验', supported: '支持', insufficient: '支持不足', conflicting: '冲突',
+  source_dead: '来源失效', needs_recheck: '正文变化需复查', unknown: '待核验',
+};
+const VERIF_CLASS = {
+  pending: 'v-pending', supported: 'v-ok', insufficient: 'v-warn', conflicting: 'v-bad',
+  source_dead: 'v-bad', needs_recheck: 'v-warn', unknown: 'v-pending',
+};
+
+$('#btn-cites').addEventListener('click', showCitationList);
+
+async function showCitationList() {
+  if (!currentAid) { toast_('先打开草稿'); return; }
+  const card = addPanelCard('引用清单', '加载中…');
+  try {
+    const r = await api(`/api/articles/${currentAid}/citations`);
+    const cites = (r.citations || []).filter(c => c.status !== 'orphaned');
+    if (!cites.length) {
+      card.innerHTML = '<div class="ins-head"><span class="ins-t">引用清单</span></div><div class="ins-row"><span class="v">这篇草稿还没有引用。</span></div>';
+      return;
+    }
+    card.innerHTML = '<div class="ins-head"><span class="ins-t">引用清单 <span class="cnt">' + cites.length + '</span></span></div>' +
+      cites.map((c, i) => `
+        <div class="cite-row" data-cid="${c.id}" data-bid="${escapeHtml(c.block_id || '')}">
+          <div class="cite-top">
+            <span class="cite-no">[${i + 1}]</span>
+            <span class="cite-src">${escapeHtml(c.source_title || '来源')}</span>
+            <span class="cite-v ${VERIF_CLASS[c.verification_status] || 'v-pending'}">${VERIF_LABEL[c.verification_status] || '待核验'}</span>
+          </div>
+          <div class="cite-quote">${escapeHtml((c.quote || '').slice(0, 80))}</div>
+          <div class="res-acts">
+            <button class="mini2" data-x="locate">定位正文</button>
+            <button class="mini2" data-x="verif">改状态</button>
+            <button class="mini2" data-x="del">移除</button>
+          </div>
+        </div>`).join('');
+    card.querySelectorAll('[data-x="locate"]').forEach(b => b.onclick = () => {
+      const bid = b.closest('.cite-row').dataset.bid;
+      const block = document.querySelector(`#article .blk.edit[data-bid="${bid}"]`);
+      if (block) {
+        block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        block.classList.add('rv-flash');
+        setTimeout(() => block.classList.remove('rv-flash'), 1600);
+      } else { toast_('正文位置已不存在（块被删）'); }
+    });
+    card.querySelectorAll('[data-x="verif"]').forEach(b => b.onclick = () => {
+      const cid = +b.closest('.cite-row').dataset.cid;
+      const st = prompt('核验状态：pending/supported/insufficient/conflicting/source_dead/needs_recheck');
+      if (!st) return;
+      api(`/api/citations/${cid}/verification`, { method: 'POST', body: JSON.stringify({ status: st }) })
+        .then(() => { toast_('状态已更新'); showCitationList(); })
+        .catch(e => toast_('更新失败：' + e.message));
+    });
+    card.querySelectorAll('[data-x="del"]').forEach(b => b.onclick = async () => {
+      const cid = +b.closest('.cite-row').dataset.cid;
+      if (!confirm('移除这条引用？（正文文字保留）')) return;
+      try {
+        await api(`/api/citations/${cid}`, { method: 'DELETE' });
+        await renderCitationBadges();
+        toast_('已移除引用');
+        showCitationList();
+      } catch (e) { toast_('移除失败：' + e.message); }
+    });
+  } catch (e) {
+    card.innerHTML = '<div class="ins-head"><span class="ins-t">引用清单</span></div><div class="ins-row"><span class="v">加载失败：' + escapeHtml(e.message) + '</span></div>';
+  }
+}
+
 /* 引用编号渲染：由文章 citations 计算，badge 不写入正文（保存时无 [N] 污染） */
 async function renderCitationBadges() {
   if (!currentAid) return;
@@ -913,16 +1233,23 @@ async function ensureSource(res, provider) {
 }
 
 /* ========== 搜索链路（真搜索：Wikipedia / DuckDuckGo，降级模型知识） ========== */
-async function runSearch(target) {
+async function runSearch(target, claimMode = false) {
   target = target || firstBlock();
   if (!target) { toast_('先写点什么再搜索'); return; }
   const sel = captureSelection(target); // 精确选中文字（无选中则整段）
-  const q = (sel ? sel.text : target.textContent.trim()).slice(0, 200);
+  const q = claimMode ? (target.claim || '').slice(0, 200) : (sel ? sel.text : target.textContent.trim()).slice(0, 200);
   if (!q) { toast_('这一段还是空的'); return; }
   const card = document.createElement('div');
   card.className = 'ai-card';
   card.innerHTML = '<div class="ai-head">搜索中…</div><div class="opt">联网检索 + 模型整理资料线索，首次可能需要一点时间</div>';
-  target.after(card);
+  if (claimMode) {
+    // 查证模式：结果进右栏；锚点指向首个内容块（引用按钮需要真实 bid）
+    const anchorBlock = firstBlock();
+    $('#cardflow').prepend(card);
+    if (anchorBlock) target = anchorBlock;
+  } else {
+    target.after(card);
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 75000);
   try {

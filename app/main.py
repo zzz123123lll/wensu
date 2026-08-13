@@ -395,9 +395,10 @@ def api_ai_ask(body: AskIn):
             ctx = (ctx + "\n\n" if ctx else "") + hist_block
         answer = ai_service.ask(conn, body.prompt, ctx)
         model = ai_service.model_name_for(conn, "ask")
+        ask_id = None
         if body.article_id:
-            db.record_ask(conn, body.article_id, body.prompt, answer, model)
-        return {"reply": answer, "model": model}
+            ask_id = db.record_ask(conn, body.article_id, body.prompt, answer, model)
+        return {"reply": answer, "model": model, "ask_id": ask_id}
     except LLMError as e:
         raise _ai_error(e)
     finally:
@@ -529,6 +530,18 @@ def api_create_material(pid: int, body: MaterialIn):
     try:
         mid = db.create_material(conn, pid, title, body.content, body.source_id, body.tags)
         return {"id": mid}
+    finally:
+        conn.close()
+
+
+@app.get("/api/materials/{mid}")
+def api_get_material(mid: int):
+    conn = _conn()
+    try:
+        m = db.get_material(conn, mid)
+        if m is None:
+            raise HTTPException(404, "素材不存在")
+        return {"material": m}
     finally:
         conn.close()
 
@@ -732,6 +745,34 @@ def api_copilot_suggest(body: SuggestIn):
             # 手动标记后刷新建议：把标记也记入信号（保持状态一致）
             copilot.record_signal(body.article_id, {"type": "mark", "issue": body.issue, "focus": body.block_id or "article"})
         return {"suggestions": sugs, "state": state}
+    finally:
+        conn.close()
+
+
+@app.get("/api/articles/{aid}/continue")
+def api_continue_writing(aid: int):
+    """方案 E：继续写入口——上次编辑时间、最近素材、待处理检查项。"""
+    conn = _conn()
+    try:
+        art = db.get_article(conn, aid)
+        if art is None:
+            raise HTTPException(404, "草稿不存在")
+        mats = db.list_materials(conn, art["project_id"])
+        sess = conn.execute(
+            "SELECT id FROM review_sessions WHERE article_id = ? AND status != 'error' ORDER BY id DESC LIMIT 1",
+            (aid,),
+        ).fetchone()
+        pending = 0
+        if sess:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM review_issues WHERE review_id = ? AND state = 'open'", (sess["id"],)
+            ).fetchone()
+            pending = row["n"] if row else 0
+        return {
+            "last_edited": art["updated_at"],
+            "recent_materials": mats[:3],
+            "pending_review": pending,
+        }
     finally:
         conn.close()
 

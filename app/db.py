@@ -461,6 +461,11 @@ def list_materials(conn, project_id: int | None = None, q: str = "", tag: str = 
     return out
 
 
+def get_material(conn, material_id: int) -> dict | None:
+    rows = list_materials(conn)
+    return next((m for m in rows if m["id"] == material_id), None)
+
+
 def material_usage(conn, material_id: int) -> dict:
     """删除影响范围：该素材（及其来源）被哪些草稿引用。方案 A：删除前必须展示影响。"""
     m = conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()

@@ -1,7 +1,7 @@
 // review 面板：进度 + Issue 卡（筛选/定位/逐项采用/忽略）+ anchors 高亮
 
 import { escapeHtml } from '../security.js';
-import { toast_, openArticle, currentAid } from '../app.js';
+import { toast_, openArticle, currentAid, runSearch } from '../app.js';
 import { reviewApi, readReviewStream } from './api.js';
 import { openLauncher } from './launcher.js';
 import { openExport } from './export.js';
@@ -78,6 +78,7 @@ function renderPanel(reviewId, aid, issues, profile, selection) {
         <div class="rv-reason">${escapeHtml(i.reason || '')}</div>
         <div class="rv-acts">
           <button class="mini2" data-x="accept">采用</button>
+          ${i.anchor && i.anchor.original_text ? '<button class="mini2" data-x="find">帮我查</button>' : ''}
           <button class="mini2" data-x="ignore">忽略</button>
         </div>
       </div>`).join('') || '<div class="opt">没有未处理的问题 🎉</div>';
@@ -104,6 +105,19 @@ function renderPanel(reviewId, aid, issues, profile, selection) {
         await reviewApi(`/api/reviews/${reviewId}/issues/${iid}/ignore`, { method: 'POST' });
         item.remove();
         updateCount();
+      };
+      const findBtn = item.querySelector('[data-x="find"]');
+      if (findBtn) findBtn.onclick = e => {
+        e.stopPropagation();
+        // 方案 E：查证闭环——携带正文主张触发搜索，结果提供证据候选/修改候选，不自动覆盖正文
+        const issue = _anchorMap.get(iid);
+        const claim = issue && issue.anchor && issue.anchor.original_text ? issue.anchor.original_text : (issue ? issue.reason : '');
+        if (claim) {
+          toast_('正在查证：' + claim.slice(0, 30) + '…');
+          runSearch({ claim }, true);
+        } else {
+          toast_('这条问题没有可查证的原文位置');
+        }
       };
     });
   };
