@@ -165,6 +165,16 @@ class MaterialIn(BaseModel):
     title: str
     content: str = ""
     source_id: int | None = None
+    tags: list[str] = []
+
+
+class AskUsageIn(BaseModel):
+    usage: str  # saved_as_material | inserted_to_body
+
+
+class VerificationIn(BaseModel):
+    status: str  # pending|supported|insufficient|conflicting|source_dead|needs_recheck
+    note: str = ""
 
 
 class CitationIn(BaseModel):
@@ -230,6 +240,24 @@ def _conn():
     conn = db.connect()
     db.init(conn)
     return conn
+
+
+def _changed_block_ids(conn, aid: int, new_blocks: list[dict]) -> set[str]:
+    """新旧正文块 diff：返回文本实质变化的 block_id（方案 C 核验失效依据）。"""
+    old = conn.execute("SELECT blocks_json FROM articles WHERE id = ?", (aid,)).fetchone()
+    if old is None:
+        return set()
+    try:
+        old_blocks = json.loads(old["blocks_json"])
+    except Exception:
+        return set()
+    old_map = {b.get("id"): b.get("text", "") for b in old_blocks if b.get("id")}
+    new_map = {b.get("id"): b.get("text", "") for b in new_blocks if b.get("id")}
+    changed = set()
+    for bid, text in new_map.items():
+        if old_map.get(bid) != text:
+            changed.add(bid)
+    return changed
 
 
 @app.get("/api/projects")
@@ -312,6 +340,11 @@ def api_save_article(aid: int, body: ArticleUpdate):
                 "blocks": art["blocks"] if art else [],
                 "blocks_hash": art["blocks_hash"] if art else "",
             })
+        # 方案 C：正文块实质变化 → 相关引用核验自动失效（needs_recheck）
+        if body.blocks is not None:
+            changed = _changed_block_ids(conn, aid, [b.model_dump() for b in body.blocks])
+            if changed:
+                db.invalidate_citations_on_edit(conn, aid, changed)
         return {
             "ok": True,
             "article_id": aid,
@@ -477,6 +510,16 @@ def api_list_materials(pid: int):
         conn.close()
 
 
+@app.get("/api/materials")
+def api_search_materials(q: str = "", tag: str = "", source_type: str = "", project_id: int | None = None):
+    """素材库：全部或按项目，支持关键词/标签/来源类型筛选（方案 A）。"""
+    conn = _conn()
+    try:
+        return {"materials": db.list_materials(conn, project_id, q, tag, source_type)}
+    finally:
+        conn.close()
+
+
 @app.post("/api/projects/{pid}/materials")
 def api_create_material(pid: int, body: MaterialIn):
     title = body.title.strip()
@@ -484,8 +527,52 @@ def api_create_material(pid: int, body: MaterialIn):
         raise HTTPException(400, "素材标题不能为空")
     conn = _conn()
     try:
-        mid = db.create_material(conn, pid, title, body.content, body.source_id)
+        mid = db.create_material(conn, pid, title, body.content, body.source_id, body.tags)
         return {"id": mid}
+    finally:
+        conn.close()
+
+
+@app.patch("/api/materials/{mid}")
+def api_update_material(mid: int, body: MaterialIn):
+    """编辑标签/标题/内容（方案 A：素材详情可编辑标签）。"""
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "UPDATE materials SET title = ?, content = ?, tags = ? WHERE id = ?",
+            (body.title.strip()[:200], body.content, json.dumps(body.tags or [], ensure_ascii=False), mid),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "素材不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/materials/{mid}/usage")
+def api_material_usage(mid: int):
+    """删除影响范围：该素材被哪些草稿引用（方案 A：删除前必须展示）。"""
+    conn = _conn()
+    try:
+        return db.material_usage(conn, mid)
+    finally:
+        conn.close()
+
+
+@app.delete("/api/materials/{mid}")
+def api_delete_material(mid: int, unlink_only: int = 0):
+    """删除素材；被引用时默认拒绝，unlink_only=1 仅解除关系（正文保留）。"""
+    conn = _conn()
+    try:
+        usage = db.material_usage(conn, mid)
+        if usage["material"] is None:
+            raise HTTPException(404, "素材不存在")
+        if usage["citations"] and not unlink_only:
+            raise HTTPException(409, f"该素材被 {len(usage['citations'])} 处引用，需先解除关系或确认影响范围")
+        conn.execute("DELETE FROM materials WHERE id = ?", (mid,))
+        conn.commit()
+        return {"ok": True, "unlinked": bool(unlink_only and usage["citations"])}
     finally:
         conn.close()
 
@@ -653,7 +740,31 @@ def api_copilot_suggest(body: SuggestIn):
 def api_list_asks(aid: int):
     conn = _conn()
     try:
-        return {"asks": db.list_asks(conn, aid, 20)}
+        return {"asks": db.list_asks(conn, aid, 50)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/asks/{ask_id}/usage")
+def api_set_ask_usage(ask_id: int, body: AskUsageIn):
+    """Ask 结果使用状态（方案 B 固定动作名：保存为素材 / 插入正文）。"""
+    conn = _conn()
+    try:
+        if not db.set_ask_usage(conn, ask_id, body.usage):
+            raise HTTPException(404, "问答记录不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/citations/{cid}/verification")
+def api_set_citation_verification(cid: int, body: VerificationIn):
+    """引用核验状态（方案 C 六态）。"""
+    conn = _conn()
+    try:
+        if not db.set_citation_verification(conn, cid, body.status, body.note):
+            raise HTTPException(404, "引用不存在")
+        return {"ok": True}
     finally:
         conn.close()
 

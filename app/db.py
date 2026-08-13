@@ -209,6 +209,17 @@ MIGRATIONS: list[list[str]] = [
         "CREATE INDEX IF NOT EXISTS idx_review_issues_review ON review_issues(review_id)",
         "CREATE INDEX IF NOT EXISTS idx_review_patches_review ON review_variant_patches(review_id)",
     ],
+    # v7：下一阶段进化方案 阶段1 对象扩展
+    # - materials：标签/元数据（访问时间、保存方式、使用状态、相关草稿）
+    # - article_asks：元数据（来源范围、是否已转素材/正文）
+    # - citations：核验状态语义化（待核验/支持/支持不足/冲突/来源失效/正文变化需复查）
+    [
+        "ALTER TABLE materials ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE materials ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE article_asks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE citations ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+        "CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id)",
+    ],
 ]
 
 
@@ -407,20 +418,64 @@ def list_sources(conn, project_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def create_material(conn, project_id: int, title: str, content: str = "", source_id: int | None = None) -> int:
+def create_material(conn, project_id: int, title: str, content: str = "", source_id: int | None = None, tags: list[str] | None = None) -> int:
+    meta = {"saved_via": "search", "accessed_at": _now(), "usage": "unused"}
     cur = conn.execute(
-        "INSERT INTO materials (project_id, source_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)",
-        (project_id, source_id, title[:200], content, _now()),
+        "INSERT INTO materials (project_id, source_id, title, content, tags, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (project_id, source_id, title[:200], content, json.dumps(tags or [], ensure_ascii=False), json.dumps(meta, ensure_ascii=False), _now()),
     )
     conn.commit()
     return cur.lastrowid
 
 
-def list_materials(conn, project_id: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM materials WHERE project_id = ? ORDER BY id DESC", (project_id,)
+def list_materials(conn, project_id: int | None = None, q: str = "", tag: str = "", source_type: str = "") -> list[dict]:
+    sql = ("SELECT m.*, s.url, s.canonical_url, s.title AS source_title, s.provider "
+           "FROM materials m LEFT JOIN sources s ON s.id = m.source_id WHERE 1=1")
+    args: list = []
+    if project_id is not None:
+        sql += " AND m.project_id = ?"
+        args.append(project_id)
+    if q:
+        sql += " AND (m.title LIKE ? OR m.content LIKE ?)"
+        args += [f"%{q}%", f"%{q}%"]
+    if tag:
+        sql += " AND m.tags LIKE ?"
+        args.append(f'%"{tag}"%')
+    if source_type:
+        sql += " AND COALESCE(s.provider, '') = ?"
+        args.append(source_type)
+    sql += " ORDER BY m.id DESC"
+    rows = conn.execute(sql, args).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["tags"] = json.loads(d.get("tags") or "[]")
+        except Exception:
+            d["tags"] = []
+        try:
+            d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+        except Exception:
+            d["metadata"] = {}
+        out.append(d)
+    return out
+
+
+def material_usage(conn, material_id: int) -> dict:
+    """删除影响范围：该素材（及其来源）被哪些草稿引用。方案 A：删除前必须展示影响。"""
+    m = conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+    if m is None:
+        return {"material": None, "citations": [], "articles": []}
+    cites = conn.execute(
+        "SELECT c.id, c.article_id, c.quote, a.title AS article_title "
+        "FROM citations c LEFT JOIN articles a ON a.id = c.article_id "
+        "WHERE c.source_id = ? AND c.status = 'active'", (m["source_id"],)
     ).fetchall()
-    return [dict(r) for r in rows]
+    return {
+        "material": dict(m),
+        "citations": [dict(x) for x in cites],
+        "articles": sorted({x["article_id"] for x in cites}),
+    }
 
 
 def create_citation(conn, article_id: int, block_id: str, source_id: int,
@@ -574,11 +629,11 @@ def restore_revision(conn, aid: int, version: int) -> int:
 
 ASK_KEEP = 30   # checkpoint：超过即裁剪，保留最近 30 条
 
-def record_ask(conn, article_id: int, prompt: str, response: str = "", model: str = "") -> int:
+def record_ask(conn, article_id: int, prompt: str, response: str = "", model: str = "", metadata: dict | None = None) -> int:
     cur = conn.execute(
-        "INSERT INTO article_asks (article_id, prompt, response, model, created_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (article_id, prompt[:4000], response[:8000], model, _now()),
+        "INSERT INTO article_asks (article_id, prompt, response, model, metadata_json, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (article_id, prompt[:4000], response[:8000], model, json.dumps(metadata or {}, ensure_ascii=False), _now()),
     )
     conn.commit()
     n = conn.execute("SELECT COUNT(*) AS n FROM article_asks WHERE article_id = ?", (article_id,)).fetchone()["n"]
@@ -594,10 +649,63 @@ def record_ask(conn, article_id: int, prompt: str, response: str = "", model: st
 
 def list_asks(conn, article_id: int, limit: int = 10) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, prompt, response, model, created_at FROM article_asks"
+        "SELECT id, prompt, response, model, metadata_json, created_at FROM article_asks"
         " WHERE article_id = ? ORDER BY id DESC LIMIT ?", (article_id, limit)
     ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+        except Exception:
+            d["metadata"] = {}
+        out.append(d)
+    return out
+
+
+def set_ask_usage(conn, ask_id: int, usage: str) -> bool:
+    """标记 Ask 结果的使用状态：saved_as_material / inserted_to_body。方案 B 动作命名固定。"""
+    row = conn.execute("SELECT metadata_json FROM article_asks WHERE id = ?", (ask_id,)).fetchone()
+    if row is None:
+        return False
+    try:
+        meta = json.loads(row["metadata_json"] or "{}")
+    except Exception:
+        meta = {}
+    meta["usage"] = usage
+    conn.execute("UPDATE article_asks SET metadata_json = ? WHERE id = ?",
+                 (json.dumps(meta, ensure_ascii=False), ask_id))
+    conn.commit()
+    return True
+
+
+VERIF_PENDING, VERIF_SUPPORTED, VERIF_INSUFFICIENT, VERIF_CONFLICTING, VERIF_SOURCE_DEAD, VERIF_NEEDS_RECHECK = (
+    "pending", "supported", "insufficient", "conflicting", "source_dead", "needs_recheck")
+
+
+def set_citation_verification(conn, citation_id: int, status: str, note: str = "") -> bool:
+    meta = {"note": note, "checked_at": _now()}
+    cur = conn.execute(
+        "UPDATE citations SET verification_status = ?, metadata_json = ? WHERE id = ?",
+        (status, json.dumps(meta, ensure_ascii=False), citation_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def invalidate_citations_on_edit(conn, aid: int, changed_block_ids: set[str]) -> int:
+    """方案 C：正文主张实质变化 → 相关引用核验状态自动失效（needs_recheck）。"""
+    if not changed_block_ids:
+        return 0
+    marks = ",".join("?" * len(changed_block_ids))
+    cur = conn.execute(
+        f"UPDATE citations SET verification_status = '{VERIF_NEEDS_RECHECK}'"
+        " WHERE article_id = ? AND block_id IN (" + marks + ") AND status = 'active'"
+        " AND verification_status NOT IN ('" + VERIF_NEEDS_RECHECK + "')",
+        (aid, *changed_block_ids),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def add_pref(conn, key: str, content: str, source: str = "user") -> int:
