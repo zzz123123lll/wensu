@@ -2,13 +2,14 @@
 
 import json
 import os
+import secrets
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import db
-from app.review import pack_loader, repository, service
+from app.review import models, pack_loader, repository, service
 
 router = APIRouter(prefix="/api", tags=["review"])
 
@@ -28,6 +29,11 @@ class ReviewIssueActionIn(BaseModel):
 
 class ExportIn(BaseModel):
     target: str | None = None  # 渠道包 id（如 wechat-mini）；None = 仅通用版
+
+
+class ImportIn(BaseModel):
+    content: str = ""  # .wensu-rules.json 内容
+    confirm_token: str | None = None  # 二阶段确认 token
 
 
 @router.get("/review/packs")
@@ -92,6 +98,111 @@ def put_rule_override(rule_id: str, body: RuleOverrideIn):
     finally:
         conn.close()
     return {"ok": True}
+
+
+@router.delete("/review/rules/{rule_id}")
+def delete_rule_override(rule_id: str):
+    """删除 override = 恢复内置默认（回滚）。"""
+    conn = db.connect()
+    try:
+        ok = repository.delete_override(conn, rule_id)
+        if not ok:
+            raise HTTPException(404, "没有该规则的覆盖")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.post("/review/custom-rules")
+def add_custom_rule(body: dict):
+    """新增自定义规则（通过完整 schema 校验）。"""
+    try:
+        models.validate_rule(body)
+    except models.ReviewRuleError as e:
+        raise HTTPException(400, str(e))
+    conn = db.connect()
+    try:
+        cid = repository.add_custom_rule(conn, body)
+        return {"id": cid}
+    finally:
+        conn.close()
+
+
+# ---------- 规则导入（两阶段：预览 → 确认安装） ----------
+
+MAX_IMPORT_BYTES = 200_000
+_import_tokens: dict[str, dict] = {}  # token -> {"preview": {...}, "created_at": ts}
+
+
+@router.post("/review/rules/import")
+def preview_import(body: ImportIn):
+    """第一阶段：校验并预览导入差异；返回安装 token（不安装）。"""
+    import time
+    if len(body.content.encode("utf-8")) > MAX_IMPORT_BYTES:
+        raise HTTPException(400, "导入文件超过 200KB 上限")
+    try:
+        data = json.loads(body.content)
+    except Exception:
+        raise HTTPException(400, "不是合法 JSON")
+    if not isinstance(data, dict) or "rules" not in data:
+        raise HTTPException(400, "导入格式：{\"rules\": [...]} 的 .wensu-rules.json")
+    rules = data.get("rules", [])
+    if not isinstance(rules, list) or not rules:
+        raise HTTPException(400, "没有可导入的规则")
+    if len(rules) > 100:
+        raise HTTPException(400, "单次导入规则数超过 100")
+
+    conn = db.connect()
+    try:
+        existing = repository.list_overrides(conn)
+        custom_ids = {c["rule"]["id"] for c in repository.list_custom_rules(conn)}
+    finally:
+        conn.close()
+
+    preview = {"added": [], "changed": [], "rejected": []}
+    for r in rules:
+        try:
+            models.validate_rule(r)
+        except models.ReviewRuleError as e:
+            preview["rejected"].append({"id": r.get("id", "?"), "reason": str(e)})
+            continue
+        rid = r["id"]
+        if rid in existing or rid in custom_ids:
+            preview["changed"].append({"id": rid, "name": r.get("name", "")})
+        else:
+            preview["added"].append({"id": rid, "name": r.get("name", "")})
+
+    token = secrets.token_urlsafe(24)
+    _import_tokens[token] = {"rules": rules, "ts": time.time()}
+    return {"preview": preview, "token": token,
+            "message": f"将新增 {len(preview['added'])} 条、更新 {len(preview['changed'])} 条、拒绝 {len(preview['rejected'])} 条"}
+
+
+@router.post("/review/rules/import/confirm")
+def confirm_import(body: ImportIn):
+    """第二阶段：凭 token 安装（用户确认后调用）。"""
+    import time
+    item = _import_tokens.pop(body.confirm_token, None) if body.confirm_token else None
+    if item is None:
+        raise HTTPException(400, "导入 token 无效或已过期，请重新预览")
+    if time.time() - item["ts"] > 600:
+        raise HTTPException(400, "导入预览已过期（10 分钟），请重新预览")
+    conn = db.connect()
+    try:
+        for r in item["rules"]:
+            try:
+                models.validate_rule(r)
+            except models.ReviewRuleError as e:
+                raise HTTPException(400, f"安装时校验失败：{r.get('id')} → {e}")
+            if r["id"].startswith("my."):
+                repository.add_custom_rule(conn, r)
+            else:
+                # 内置规则 → 存为 override patch（不改内置 JSON，可恢复默认）
+                patch = {k: r.get(k) for k in ("params", "severity", "enabled", "fix_mode") if k in r}
+                repository.set_override(conn, r["id"], patch)
+        return {"ok": True, "installed": len(item["rules"])}
+    finally:
+        conn.close()
 
 
 @router.post("/reviews")

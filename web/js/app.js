@@ -323,6 +323,11 @@ async function loadProfiles() {
 /* 设置弹窗打开时加载偏好与模型配置 */
 const _origOpen = $('#btn-settings').onclick;
 $('#btn-settings').addEventListener('click', () => { loadPrefs(); loadProfiles(); });
+import('/js/review/rules.js').then(m => {
+  m.loadRulesSection();
+  const btn = $('#rules-import-btn');
+  if (btn) btn.addEventListener('click', () => m.openRuleImport());
+}).catch(() => {});
 
 $('#pref-add-btn').addEventListener('click', async () => {
   const key = $('#pref-key').value.trim();
