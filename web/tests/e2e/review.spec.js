@@ -73,6 +73,25 @@ test('成稿检查：启动→列表→忽略→采用主稿修复→复检', as
   // 筛选按钮存在
   await expect(page.locator('.rv-filter')).toContainText('错误');
 
+  // 导出双版本（mock：通用版/渠道版/摘要）——在采用主稿前（采用后刷新会重置面板）
+  await page.route('**/api/reviews/1/exports', r => r.fulfill({ json: {
+    export_id: 9,
+    general_file: '检查测试-通用版.md',
+    channel_file: '检查测试-wechatminiblog.md',
+    stale: [],
+    manifest: {},
+  } }));
+  await page.route('**/api/review-exports/9/general', r => r.fulfill({ body: '# 检查测试\n\n通用内容', contentType: 'text/markdown' }));
+  await page.route('**/api/review-exports/9/channel', r => r.fulfill({ body: '# 检查测试\n\n渠道内容', contentType: 'text/markdown' }));
+  await page.route('**/api/review-exports/9/report', r => r.fulfill({ json: { files: {}, issues: {} } }));
+  await page.click('#rv-export');
+  await page.waitForSelector('.ai-card.export-card');
+  await expect(page.locator('.ai-card.export-card')).toContainText('通用版');
+  // 切到渠道版 tab
+  await page.click('.ex-tabs [data-tab="channel"]');
+  await page.waitForTimeout(400);
+  await expect(page.locator('#ex-body pre')).toContainText('渠道内容');
+
   // 采用第二条（主稿修复）
   await page.click('.rv-item[data-iid="2"] [data-x="accept"]');
   await page.waitForTimeout(400);

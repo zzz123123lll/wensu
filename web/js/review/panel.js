@@ -4,6 +4,7 @@ import { escapeHtml } from '../security.js';
 import { toast_, openArticle, currentAid } from '../app.js';
 import { reviewApi, readReviewStream } from './api.js';
 import { openLauncher } from './launcher.js';
+import { openExport } from './export.js';
 
 const SEV_LABEL = { error: '错误', warning: '警告', suggestion: '建议' };
 const SEV_CLASS = { error: 'e', warning: 'w', suggestion: 's' };
@@ -23,7 +24,7 @@ export async function runReview(aid) {
     });
     const issues = await readStreamIssues(created.review_id);
     busy.remove();
-    renderPanel(created.review_id, aid, issues, created.profile);
+    renderPanel(created.review_id, aid, issues, created.profile, sel);
   } catch (e) {
     busy.innerHTML = '<div class="ai-head">成稿检查失败</div><div class="opt">' + escapeHtml(e.message) + '</div>';
   }
@@ -37,7 +38,7 @@ async function readStreamIssues(reviewId) {
   return issues;
 }
 
-function renderPanel(reviewId, aid, issues, profile) {
+function renderPanel(reviewId, aid, issues, profile, selection) {
   setAnchorMap(issues); // 供锚点定位回查
   document.querySelectorAll('.ai-card.review-panel').forEach(c => c.remove());
   const card = document.createElement('div');
@@ -52,7 +53,8 @@ function renderPanel(reviewId, aid, issues, profile) {
       <button class="mini2 f" data-f="warning">警告</button>
       <button class="mini2 f" data-f="suggestion">建议</button>
     </div>
-    <div class="rv-list"></div>`;
+    <div class="rv-list"></div>
+    <div class="rv-foot"><button class="btn btn-p" id="rv-export">导出双版本</button></div>`;
   const flow = document.getElementById('cardflow');
   flow.prepend(card);
 
@@ -112,6 +114,11 @@ function renderPanel(reviewId, aid, issues, profile) {
     toast_('已创建新检查');
     renderPanel(undefined, aid, [], {});
     runReview(aid); // 重新走启动器（保留用户选择语义简化：重新选）
+  };
+  const exBtn = card.querySelector('#rv-export');
+  if (exBtn) exBtn.onclick = () => {
+    const channel = (selection && selection.channel && selection.channel.length) ? selection.channel[0] : null;
+    openExport(reviewId, channel);
   };
   render('all');
 }

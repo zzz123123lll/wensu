@@ -1,10 +1,11 @@
-"""review service：Session 编排、快照、确定性检查运行、主稿/变体应用、复检。
+"""review service：Session 编排、快照、确定性检查运行、主稿/变体应用、复检、双版本导出。
 
 原则：快照运行（不可变）、失效即停止（stale gate）、逐项确认、主稿/变体分离。
 """
 
 import hashlib
 import json
+import os
 
 from app import db
 from app.review import deterministic, pack_loader, repository, resolver
@@ -166,3 +167,72 @@ def _selection_from_profile(profile: dict) -> dict:
             if layer in sel:
                 sel[layer].append(r["pack_id"])
     return sel
+
+
+# ---------- 双版本导出（Phase 3） ----------
+
+EXPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "exports")
+
+
+def export_review(conn, review_id: int, target: str | None = None) -> dict:
+    """生成通用版 + 渠道版 Markdown 与摘要 manifest，落库并写文件。
+
+    target 为渠道包 id（如 wechat-mini）；None 表示无渠道（只出通用版）。
+    stale 补丁不会静默应用：渠道版基于未应用 stale 的 blocks 生成，
+    并在 manifest 中记录 stale；前端必须向用户确认后导出。
+    """
+    from app.review import exporter
+    s = repository.get_session(conn, review_id)
+    if s is None:
+        raise db.NotFoundError(f"review {review_id}")
+    art = db.get_article(conn, s["article_id"])
+    title = art["title"] if art else "文章"
+    issues = repository.list_issues(conn, review_id)
+    patches = repository.list_patches(conn, review_id)
+
+    general_md = exporter.render_markdown(s["blocks"], s["citations"])
+    general_file = exporter.safe_filename(title, "通用版")
+
+    channel_file = None
+    channel_md = None
+    stale = []
+    active_targets = {p.get("target") for p in patches if p.get("status") == "active"}
+    if target and target in active_targets:
+        target_patches = [p for p in patches if p.get("target") == target]
+        # stale gate：相对【当前主稿】判定（快照里原文总在，无法暴露陈旧）
+        current_blocks = (db.get_article(conn, s["article_id"]) or {}).get("blocks", [])
+        fresh = []
+        for p in target_patches:
+            sel = p.get("selection", {})
+            original = sel.get("original_text", "")
+            blk = next((b for b in current_blocks if b.get("id") == p.get("block_id")), None)
+            txt = (blk or {}).get("text", "")
+            if blk is None or txt[sel.get("start_utf16", 0):sel.get("end_utf16", len(original))] != original:
+                stale.append({**p, "stale_reason": "当前主稿中原文已变化"})
+                continue
+            fresh.append(p)
+        # 渠道版基于快照应用 fresh 补丁（可重现），stale 补丁不静默跳过
+        ch_blocks, apply_stale = exporter.apply_patches(s["blocks"], fresh)
+        stale.extend(apply_stale)
+        channel_md = exporter.render_markdown(ch_blocks, s["citations"])
+        channel_file = exporter.safe_filename(title, target.replace("-", ""), existing=[general_file])
+
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    general_path = os.path.join(EXPORT_DIR, general_file)
+    with open(general_path, "w", encoding="utf-8") as f:
+        f.write(general_md)
+    if channel_md is not None:
+        channel_path = os.path.join(EXPORT_DIR, channel_file)
+        with open(channel_path, "w", encoding="utf-8") as f:
+            f.write(channel_md)
+
+    manifest = exporter.build_manifest(
+        {"article_id": s["article_id"], "article_version": s["article_version"],
+         "snapshot_hash": s["snapshot_hash"]},
+        s["profile"], issues, patches, stale, general_md, channel_md,
+        general_file, channel_file,
+    )
+    export_id = repository.create_export(conn, review_id, s["article_version"],
+                                         target or "general", manifest)
+    return {"export_id": export_id, "general_file": general_file, "channel_file": channel_file,
+            "stale": stale, "manifest": manifest}

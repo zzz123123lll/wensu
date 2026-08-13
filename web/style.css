@@ -115,6 +115,13 @@ body {
 .rv-acts { display: flex; gap: 6px; }
 .rv-flash { animation: rvflash 1.6s ease; border-radius: 6px; }
 @keyframes rvflash { 0% { background: rgba(0,113,227,0.18); } 100% { background: transparent; } }
+.rv-foot { margin-top: 8px; }
+.ex-warn { color: #c47f00; font-size: 11.5px; }
+.ex-tabs { display: flex; gap: 5px; margin: 8px 0 6px; }
+.ex-tabs .mini2.on { background: var(--accent-soft); color: var(--accent); }
+.ex-body { max-height: 30vh; overflow: auto; background: var(--bg); border: 1px solid rgba(0,0,0,0.06); border-radius: 8px; }
+.ex-body pre { margin: 0; padding: 10px; font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+.ex-acts { display: flex; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
 .doc.newdraft { color: var(--fg-3); font-size: 12px; }
 .doc.newdraft:hover { color: var(--accent); background: transparent; }
 

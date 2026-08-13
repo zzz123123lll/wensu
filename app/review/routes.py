@@ -1,9 +1,10 @@
 """review API 路由（APIRouter；不继续膨胀 app/main.py）。"""
 
 import json
+import os
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import db
@@ -23,6 +24,10 @@ class RuleOverrideIn(BaseModel):
 
 class ReviewIssueActionIn(BaseModel):
     pass
+
+
+class ExportIn(BaseModel):
+    target: str | None = None  # 渠道包 id（如 wechat-mini）；None = 仅通用版
 
 
 @router.get("/review/packs")
@@ -175,3 +180,47 @@ def recheck_review(review_id: int):
     finally:
         conn.close()
     return out
+
+
+@router.post("/reviews/{review_id}/exports")
+def create_export(review_id: int, body: ExportIn):
+    """生成通用/渠道 Markdown + 摘要 manifest（stale 补丁不静默应用，摘要记录）。"""
+    conn = db.connect()
+    try:
+        out = service.export_review(conn, review_id, body.target)
+    except db.NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return out
+
+
+@router.get("/review-exports/{export_id}/{kind}")
+def download_export(export_id: int, kind: str):
+    """下载 general / channel Markdown，或 report（摘要 manifest JSON）。"""
+    if kind not in ("general", "channel", "report"):
+        raise HTTPException(400, "未知导出类型")
+    conn = db.connect()
+    try:
+        row = conn.execute("SELECT manifest_json FROM review_exports WHERE id = ?", (export_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "导出不存在")
+        manifest = json.loads(row["manifest_json"])
+        files = manifest.get("files", {})
+        if kind == "report":
+            return JSONResponse(manifest)
+        finfo = files.get(kind)
+        if not finfo:
+            raise HTTPException(404, f"该导出没有 {kind} 文件")
+        path = os.path.join(service.EXPORT_DIR, finfo["name"])
+        if not os.path.exists(path):
+            raise HTTPException(404, "导出文件已丢失")
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        from urllib.parse import quote
+        return PlainTextResponse(content, media_type="text/markdown; charset=utf-8",
+                                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(finfo['name'])}"})
+    finally:
+        conn.close()
