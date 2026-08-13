@@ -141,8 +141,8 @@ def signals_to_state(signals: list[dict]) -> dict:
             focus = s.get("focus") or ("block" if s.get("block_id") else focus)
             stage = "revising" if issue in ("expression", "tone") else ("checking" if issue == "facts" else stage)
         elif t == "draft_open":
+            # 只表达"打开了草稿"这个阶段事实；不覆盖更新信号（mark/tool_click）已定的 focus/issue
             stage = "incubating" if not s.get("blocks_count") else "writing"
-            focus = "article"
     return {"stage": stage, "issue": issue, "focus": focus}
 
 
