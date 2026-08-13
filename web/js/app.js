@@ -142,11 +142,12 @@ function openArticle(aid) {
     if (br) br.addEventListener('click', () => { import('/js/review/panel.js').then(m => m.runReview(aid)).catch(e => toast_('检查模块加载失败：' + e.message)); });
     const be = $('#btn-export');
     if (be) be.addEventListener('click', () => {
-      // 统一导出（P0-5）：Markdown / 纯文本 / Word，均含引用清单与来源附录
-      const fmt = prompt('导出格式：\n1 = Markdown\n2 = 纯文本\n3 = Word (docx)\n其他 = 取消', '1');
+      // 统一导出（P0-5）：Markdown / 纯文本 / Word / 公众号 HTML，均含引用清单与来源附录
+      const fmt = prompt('导出格式：\n1 = Markdown\n2 = 纯文本\n3 = Word (docx)\n4 = 公众号 HTML（复制粘贴进公众号编辑器）\n其他 = 取消', '1');
       if (fmt === '1') location.href = `/api/articles/${aid}/export?format=md`;
       else if (fmt === '2') location.href = `/api/articles/${aid}/export?format=txt`;
       else if (fmt === '3') location.href = `/api/articles/${aid}/export?format=docx`;
+      else if (fmt === '4') location.href = `/api/articles/${aid}/export?format=wechat`;
     });
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));

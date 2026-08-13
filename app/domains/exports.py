@@ -198,20 +198,67 @@ def render_docx(data: dict, include_appendix: bool = True) -> bytes:
     return buf.getvalue()
 
 
+def _citation_entry_wechat(n: int, c: dict) -> str:
+    """引用条目（Markdown 形态，供公众号转换器渲染为可点击链接）。"""
+    title = c.get("source_title") or c.get("source_url") or "（无标题来源）"
+    url = c.get("source_url") or ""
+    label = f"[{n}] {title}"
+    if url:
+        label = f"[{n}] [{title}]({url})"
+    return f"- {label}（核验：{_verif_label(c)}）"
+
+
+def render_wechat(data: dict, theme: str = "default", include_appendix: bool = True) -> str:
+    """公众号 HTML：正文（行内样式片段）+ 引用清单 + 可选来源附录。
+
+    - 引用标记用纯文本 [N]（微信编辑器对 <sup> 支持差）
+    - 标题不进入正文（公众号标题填在标题栏，避免重复）
+    """
+    from app.domains import wechat_html
+
+    art = data["article"]
+    lines = []
+    for b in art["blocks"]:
+        md = _block_markdown(b)
+        nums = data["by_block"].get(b.get("id"), [])
+        if nums:
+            md += " " + "".join(f"[{n}]" for n, _ in nums)
+        if md:
+            lines.append(md)
+            lines.append("")
+    body = wechat_html.markdown_to_wechat_html("\n".join(lines), theme=theme)
+    out = [body]
+    if data["citations"]:
+        tail = ["---", "", "## 引用清单", ""]
+        tail.extend(_citation_entry_wechat(n, c) for n, c in data["citations"])
+        if include_appendix:
+            tail += ["", "---", "", "## 来源附录", ""]
+            for n, c in data["citations"]:
+                url = c.get("source_url") or ""
+                title = c.get("source_title") or url or "（无标题）"
+                tail.append(f"- [{n}] [{title}]({url})" if url else f"- [{n}] {title}")
+        out.append(wechat_html.markdown_to_wechat_html("\n".join(tail), theme=theme))
+    return "\n".join(part for part in out if part) + "\n"
+
+
 RENDERERS = {
     "md": render_markdown,
     "markdown": render_markdown,
     "txt": render_plain,
     "text": render_plain,
     "docx": render_docx,
+    "wechat": render_wechat,
 }
 
 
-def render(data: dict, fmt: str, include_appendix: bool = True) -> bytes:
+def render(data: dict, fmt: str, include_appendix: bool = True, theme: str = "default") -> bytes:
     renderer = RENDERERS.get(fmt.lower())
     if renderer is None:
         raise ExportError(f"不支持的导出格式: {fmt}")
-    out = renderer(data, include_appendix)
+    if fmt.lower() == "wechat":
+        out = renderer(data, theme=theme, include_appendix=include_appendix)
+    else:
+        out = renderer(data, include_appendix)
     return out if isinstance(out, bytes) else out.encode("utf-8")
 
 
@@ -225,7 +272,7 @@ def safe_filename(title: str, fmt: str, existing: list[str] | None = None) -> st
     cleaned = _UNSAFE.sub("_", (title or "文章").strip()) or "文章"
     cleaned = re.sub(r"\.{2,}", ".", cleaned)  # 连续点号（如 a..b）在部分文件系统有特殊语义
     cleaned = cleaned[:40]
-    ext = "docx" if fmt == "docx" else ("txt" if fmt == "txt" else "md")
+    ext = "docx" if fmt == "docx" else ("txt" if fmt == "txt" else ("html" if fmt in ("wechat",) else "md"))
     name = f"{cleaned}-{_now()[:10]}.{ext}"
     if existing and name in existing:
         ts = datetime.now().strftime("%H%M%S")

@@ -1089,10 +1089,11 @@ def api_test_profile(pid: int):
 
 
 @app.get("/api/articles/{aid}/export")
-def api_export_article(aid: int, format: str = "md", appendix: int = 1):
-    """统一导出（P0-5）：Markdown / 纯文本 / Word，含引用清单与来源附录。
+def api_export_article(aid: int, format: str = "md", appendix: int = 1, theme: str = "default"):
+    """统一导出（P0-5）：Markdown / 纯文本 / Word / 公众号 HTML，含引用清单与来源附录。
 
-    - format: md | txt | docx
+    - format: md | txt | docx | wechat（公众号编辑器可粘贴的行内样式 HTML 片段）
+    - theme 仅对 wechat 生效：default | elegant | simple | tech（非法值回落 default）
     - appendix=0 时省略来源附录（引用清单始终包含）
     - 导出只读，不修改原稿
     """
@@ -1103,7 +1104,7 @@ def api_export_article(aid: int, format: str = "md", appendix: int = 1):
         except export_service.ExportError as e:
             raise HTTPException(404, str(e))
         try:
-            content = export_service.render(data, format, include_appendix=bool(appendix))
+            content = export_service.render(data, format, include_appendix=bool(appendix), theme=theme)
         except export_service.ExportError as e:
             raise HTTPException(400, str(e))
         media = {
@@ -1112,6 +1113,7 @@ def api_export_article(aid: int, format: str = "md", appendix: int = 1):
             "txt": "text/plain; charset=utf-8",
             "text": "text/plain; charset=utf-8",
             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "wechat": "text/html; charset=utf-8",
         }[format.lower()]
         fname = export_service.safe_filename(data["article"]["title"], format)
         # RFC 5987：中文/特殊字符文件名在响应头中用百分号编码
