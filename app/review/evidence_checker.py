@@ -26,6 +26,14 @@ def _require_client(conn, task="insight"):
     return ai_service._require_client(conn, task=task)
 
 
+_RHETORIC_MARKERS = ("没有取代", "取代不了", "就像", "好比", "犹如", "正如", "如同", "不亚于")
+
+
+def _looks_rhetorical(quoted: str) -> bool:
+    """观点文常见类比/比喻句式：模型易误标为事实主张，确定性过滤（dogfood Bug#10）。"""
+    return any(m in quoted for m in _RHETORIC_MARKERS)
+
+
 def run_evidence_checks(conn, snapshot: dict, client_factory=None) -> list[dict]:
     """识别事实主张；无引用覆盖的 claim → 「待核实」suggestion issue。"""
     blocks = [b for b in snapshot["blocks"] if b.get("text", "").strip()]
@@ -69,6 +77,8 @@ def run_evidence_checks(conn, snapshot: dict, client_factory=None) -> list[dict]
             continue  # 锚点核对失败丢弃
         if blk in covered_blocks:
             continue  # 已有引用覆盖
+        if _looks_rhetorical(quoted):
+            continue  # 类比/比喻句不是事实主张（dogfood Bug#10 噪音）
         out.append({
             "fingerprint": f"ev|{blk}|{start}|{start + len(quoted)}",
             "rule_id": "common.evidence.pending-verification",

@@ -34,6 +34,10 @@
         </button>
       </div>
       <div class="side-inner" id="side-list"></div>
+      <button id="btn-trash" class="side-trash" title="回收站">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11M6.5 2.5h3M4 4.5l.7 9h6.6l.7-9M6.5 7v4M9.5 7v4"/></svg>
+        <span>回收站</span>
+      </button>
     </div>
 
     <!-- 中间：写作区 -->
@@ -54,7 +58,7 @@
       <div class="tools-pad">
         <div id="panel-head">
           <span class="pt">写作助手</span>
-          <span class="pstatus"><span class="pdot"></span>草稿</span>
+          <span class="pstatus" id="pstatus"><span class="pdot"></span><span id="pstatus-text">草稿</span></span>
         </div>
         <div id="cardflow">
           <div class="insight">
@@ -63,9 +67,8 @@
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M4 4l1 1M11 11l1 1M12 4l-1 1M5 11l-1 1"/><circle cx="8" cy="8" r="2.6"/></svg>
               </span>
               <span class="ins-t">当前洞察</span>
-              <span class="ins-badge">AI 接入后启用</span>
             </div>
-            <div class="ins-row"><span class="k">状态</span><span class="v">第一阶段的 AI 建议在下一阶段接入</span></div>
+            <div class="ins-row"><span class="k">状态</span><span class="v">打开一篇草稿后，点「生成洞察」让 AI 读你的文章</span></div>
           </div>
         </div>
         <div id="ask-mini">
@@ -141,6 +144,15 @@
       <button class="btn btn-p" id="modal-save">保存</button>
     </div>
     <div class="modal-hint" id="modal-hint">Key 本地加密存储（DPAPI），不会上传。</div>
+  </div>
+</div>
+
+<!-- 回收站弹层 -->
+<div id="trash-modal" class="modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+  <div class="modal-card">
+    <div class="modal-head"><span id="trash-title">回收站</span> <button id="trash-close" aria-label="关闭回收站">×</button></div>
+    <div class="modal-hint">删除的草稿在这里，可恢复。恢复会回到原项目。</div>
+    <div id="trash-list"></div>
   </div>
 </div>
 

@@ -24,11 +24,23 @@ def test_soft_delete_and_restore_article(conn):
     pid, aid = _mk(conn)
     assert len(db.list_articles(conn, pid)) == 1
     assert db.soft_delete_article(conn, aid) is True
-    assert db.list_articles(conn, pid) == []  # 列表过滤
+    assert db.list_articles(conn, pid) == []
     trash = db.list_trash(conn, pid)
     assert len(trash) == 1 and trash[0]["id"] == aid
     assert db.restore_article(conn, aid) is True
     assert len(db.list_articles(conn, pid)) == 1
+
+
+def test_restore_article_restores_deleted_project(conn):
+    """dogfood Bug#11：恢复「项目已删」的草稿，项目应一并恢复（防孤儿）。"""
+    pid, aid = _mk(conn)
+    assert db.soft_delete_project(conn, pid) is True
+    # 删项目级联软删文章（现有语义）
+    assert db.list_articles(conn, pid) == []
+    assert db.restore_article(conn, aid) is True
+    # 文章和项目都回来，UI 可见
+    assert db.list_articles(conn, pid)
+    assert any(p[0] == pid for p in db.list_projects(conn))  # (id, name) 元组
 
 
 def test_soft_delete_project_cascades(conn):

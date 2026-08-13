@@ -145,6 +145,7 @@ function openArticle(aid) {
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     $('#doc-scroll').scrollTop = 0;
     showInsightIdle(); // 默认不自动调用模型（WEN-009 安全默认）
+    resetWriteObserver(); // 写作在场观察随草稿重置
     reportSignal('draft_open', { blocks_count: a.blocks.length }); // Phase 6 信号
     loadSuggestions(); // 规则建议（无模型也可用）
   }).catch(e => toast_('打开失败：' + e.message));
@@ -210,6 +211,7 @@ function bindEditor() {
     if (block) {
       block.classList.toggle('empty', block.textContent === '');
       markDirty(currentAid);
+      onBlockEdited(block); // 写作在场观察（停顿/反复删改 → 低打扰提示）
     }
   });
   // 块标记入口：hover 显示 ⋯，点击弹问题菜单（Phase 6 显式信号）
@@ -400,6 +402,42 @@ function closeSettings() { $('#settings-modal').style.display = 'none'; }
 
 $('#btn-settings').addEventListener('click', openSettings);
 $('#modal-close').addEventListener('click', closeSettings);
+
+/* ---------- 回收站（dogfood Bug#8：可恢复承诺要有 UI 兑现） ---------- */
+$('#btn-trash').addEventListener('click', openTrash);
+$('#trash-close').addEventListener('click', () => { $('#trash-modal').style.display = 'none'; });
+
+async function openTrash() {
+  $('#trash-modal').style.display = 'flex';
+  const list = $('#trash-list');
+  list.innerHTML = '<div class="modal-hint">加载中…</div>';
+  try {
+    const r = await api('/api/trash');
+    if (!r.trash.length) {
+      list.innerHTML = '<div class="modal-hint">回收站是空的</div>';
+      return;
+    }
+    list.innerHTML = r.trash.map(t => `
+      <div class="trash-row" data-aid="${t.id}">
+        <div class="trash-main">
+          <div class="trash-title">${escapeHtml(t.title || '（无标题）')}</div>
+          <div class="trash-meta">${escapeHtml((t.deleted_at || '').slice(0, 16).replace('T', ' '))}</div>
+        </div>
+        <button class="mini2" data-x="restore">恢复</button>
+      </div>`).join('');
+    list.querySelectorAll('[data-x="restore"]').forEach(b => b.onclick = async () => {
+      const aid = +b.closest('.trash-row').dataset.aid;
+      try {
+        await api(`/api/articles/${aid}/restore`, { method: 'POST' });
+        toast_('已恢复');
+        await loadProjects();
+        openTrash();
+      } catch (e) { toast_('恢复失败：' + e.message); }
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="modal-hint">加载失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
 $('#modal-cancel').addEventListener('click', closeSettings);
 $('#settings-modal').addEventListener('click', e => { if (e.target.id === 'settings-modal') closeSettings(); });
 $('#modal-save').addEventListener('click', async () => {
@@ -615,7 +653,8 @@ async function runRewrite(target) {
       reportSignal('accept', { focus: 'block' });
       const newText = r.candidates[0].text;
       if (sel && sel.start_utf16 !== undefined) {
-        applySelectionToBlock(target, sel, newText); // 精确替换选中文字
+        // 句子边界扩展：候选可能改写整个句子，避免选区在句中替换后残留拼接（dogfood Bug#3）
+        applySelectionToBlock(target, extendToSentence(target.textContent, sel), newText);
       } else {
         target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
         setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
@@ -739,7 +778,91 @@ async function showHistory() {
   } catch (e) { toast_('历史加载失败：' + e.message); }
 }
 
+/* ---------- 写作在场观察（Phase 6 隐式弱信号 → 低打扰提示，绝不自动调模型） ---------- */
+let writeTimer = null;
+let pauseHintTimer = null;
+let idlePrompted = false;
+const blockEdits = new Map();
+
+function updatePstatus(text) {
+  const el = $('#pstatus-text');
+  if (el) el.textContent = text;
+}
+
+function resetWriteObserver() {
+  clearTimeout(writeTimer);
+  clearTimeout(pauseHintTimer);
+  idlePrompted = false;
+  blockEdits.clear();
+  updatePstatus('草稿');
+}
+
+function showPresenceHint(title, body, actionType, block) {
+  document.querySelectorAll('.presence-hint').forEach(c => c.remove());
+  const card = document.createElement('div');
+  card.className = 'insight presence-hint';
+  card.innerHTML = `
+    <div class="ins-head">
+      <span class="ins-ic"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M5.5 8h5M8 5.5v5"/></svg></span>
+      <span class="ins-t">${escapeHtml(title)}</span>
+    </div>
+    <div class="ins-row"><span class="v" style="width:auto;white-space:pre-wrap">${escapeHtml(body)}</span></div>
+    <div class="res-acts">
+      <button class="mini2" data-x="act">${actionType === 'rewrite' ? '改写这段' : '好'}</button>
+      <button class="mini2" data-x="close">不用了</button>
+    </div>`;
+  $('#cardflow').prepend(card);
+  card.querySelector('[data-x="act"]').onclick = () => {
+    card.remove();
+    if (actionType === 'rewrite') runRewrite(block || firstBlock());
+  };
+  card.querySelector('[data-x="close"]').onclick = () => card.remove();
+}
+
+function onBlockEdited(block) {
+  const chars = collectBlocks().map(b => b.text).join('').replace(/\s/g, '').length;
+  updatePstatus(chars ? `写作中 · ${chars} 字` : '草稿');
+  const bid = block.dataset.bid;
+  const now = Date.now();
+  const hist = blockEdits.get(bid) || [];
+  hist.push({ at: now });
+  while (hist.length > 3) hist.shift();
+  blockEdits.set(bid, hist);
+  // 反复删改：同块 3 次编辑且间隔 6 秒内 → 提示（本稿只提示一次）
+  if (hist.length === 3 && (now - hist[0].at) < 6000 && !idlePrompted) {
+    idlePrompted = true;
+    showPresenceHint('这段改了好几次', '卡住的话，我可以帮你换一种写法。', 'rewrite', block);
+  }
+  // 停顿：4 秒 → 状态胶囊变「停顿中」；30 秒 → 低打扰提示
+  clearTimeout(writeTimer);
+  writeTimer = setTimeout(() => updatePstatus('停顿中'), 4000);
+  clearTimeout(pauseHintTimer);
+  pauseHintTimer = setTimeout(() => {
+    if (chars >= 50 && !idlePrompted) {
+      idlePrompted = true;
+      showPresenceHint('停下来了', '需要我改写这一段，或者帮你看看结构吗？', 'rewrite', block);
+    }
+  }, 30000);
+}
+
 /* 精确选区替换：只替换选中文字（UTF-16 偏移），其余保留 */
+/* 接受 AI 改写前，把选区扩展至完整句子边界：候选改写整个句子时，选区在句中会导致替换后残留原文拼接（dogfood Bug#3） */
+function extendToSentence(raw, sel) {
+  const start = Math.min(sel.start_utf16, raw.length);
+  const end = Math.min(sel.end_utf16, raw.length);
+  const SENT_BOUNDARY = /[。！？；\n]/;
+  let s = start;
+  let e = end;
+  for (let i = start - 1; i >= 0; i--) {
+    if (SENT_BOUNDARY.test(raw[i])) { s = i + 1; break; }
+    if (i === 0) s = 0;
+  }
+  for (let i = end; i < raw.length; i++) {
+    if (SENT_BOUNDARY.test(raw[i])) { e = i + 1; break; }
+  }
+  return { start_utf16: s, end_utf16: e };
+}
+
 function applySelectionToBlock(block, sel, newText) {
   const raw = block.textContent;
   block.textContent = raw; // 归一为单文本节点（旧内容含 mark 包装时）
@@ -840,8 +963,10 @@ async function runSearch(target) {
       results.map((res, i) => `<div class="res">
         <div class="t">${escapeHtml(res.title)} <span class="src ${res.source === 'web' ? 'web' : ''}">${res.source === 'web' ? '已检索' : '模型知识'}</span></div>
         <div class="sn">${escapeHtml(res.snippet)}</div>
-        <div class="res-acts"><button class="mini2" data-x="cite">引用</button><button class="mini2" data-x="save">存入素材</button>
-        ${(res.url && safeUrl(res.url)) ? `<a class="mini2 link" href="${escapeHtml(safeUrl(res.url))}" target="_blank" rel="noopener noreferrer">打开</a>` : ''}</div>
+        <div class="res-acts">${(res.url && safeUrl(res.url))
+          ? `<button class="mini2" data-x="cite">引用</button><button class="mini2" data-x="save">存入素材</button>
+             <a class="mini2 link" href="${escapeHtml(safeUrl(res.url))}" target="_blank" rel="noopener noreferrer">打开</a>`
+          : `<span class="hint">模型知识结果没有可引用的来源链接（联网搜索后可用引用）</span>`}</div>
       </div>`).join('');
     card.querySelectorAll('[data-x="cite"]').forEach((b, i) => b.onclick = async () => {
       const res = results[i];
@@ -920,7 +1045,8 @@ async function runCheck(target) {
       pushUndo(currentAid); // 可撤销点（WEN-023）
       reportSignal('accept', { focus: 'block' });
       if (sel && sel.start_utf16 !== undefined) {
-        applySelectionToBlock(target, sel, r.suggestion); // 精确替换选中文字
+        // 核验建议同理：句子边界扩展，避免残留拼接
+        applySelectionToBlock(target, extendToSentence(target.textContent, sel), r.suggestion);
       } else {
         target.innerHTML = `<mark class="ins">${escapeHtml(r.suggestion)}</mark>`;
         setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);

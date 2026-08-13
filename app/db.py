@@ -506,22 +506,29 @@ def soft_delete_article(conn, aid: int) -> bool:
 
 
 def restore_article(conn, aid: int) -> bool:
+    # 恢复文章时若原项目已被删，一并恢复（否则文章成为孤儿：数据在但 UI 不可见，dogfood Bug#11）
+    row = conn.execute("SELECT project_id FROM articles WHERE id = ?", (aid,)).fetchone()
+    if row is None:
+        return False
+    conn.execute(
+        "UPDATE projects SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+        (row["project_id"],),
+    )
     cur = conn.execute("UPDATE articles SET deleted_at = NULL WHERE id = ?", (aid,))
     conn.commit()
     return cur.rowcount > 0
 
 
 def list_trash(conn, project_id: int | None = None) -> list[dict]:
+    sel = "SELECT id, project_id, title, deleted_at, updated_at FROM articles"
     if project_id is not None:
         rows = conn.execute(
-            "SELECT id, project_id, title, updated_at FROM articles"
-            " WHERE deleted_at IS NOT NULL AND project_id = ? ORDER BY deleted_at DESC",
+            sel + " WHERE deleted_at IS NOT NULL AND project_id = ? ORDER BY deleted_at DESC",
             (project_id,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, project_id, title, updated_at FROM articles"
-            " WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            sel + " WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
 

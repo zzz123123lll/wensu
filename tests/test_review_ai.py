@@ -103,6 +103,22 @@ def test_evidence_claim_without_citation_flagged_pending():
     assert issues[0]["source_type"] == "evidence"
 
 
+def test_evidence_rhetorical_analogy_not_flagged():
+    """dogfood Bug#10：观点文类比/比喻句不应被标为「事实性主张待核实」。"""
+    fake = FakeClient([json_dumps([
+        {"block_id": "b1", "quoted_text": "摄影没有取代画家，计算器没有取代数学家。", "claim": "factual"},
+        {"block_id": "b1", "quoted_text": "打字机没有取代作家，反而让更多人开始写作。", "claim": "factual"},
+        {"block_id": "b1", "quoted_text": "观点就像种子，需要时间发芽。", "claim": "factual"},
+        {"block_id": "b1", "quoted_text": "2025 年市场规模达 2000 亿美元。", "claim": "factual"},
+    ])])
+    issues = evidence_checker.run_evidence_checks(
+        None, _snapshot([_b("b1", "摄影没有取代画家，计算器没有取代数学家。打字机没有取代作家，反而让更多人开始写作。观点就像种子，需要时间发芽。2025 年市场规模达 2000 亿美元。")], citations=[]),
+        client_factory=lambda conn, task: fake)
+    # 只有真实数据句保留
+    assert len(issues) == 1
+    assert "2000 亿" in issues[0]["reason"]
+
+
 def test_evidence_claim_covered_by_citation_ok():
     fake = FakeClient([json_dumps([
         {"block_id": "b1", "quoted_text": "2025 年全球 AI 市场规模", "claim": "factual"},

@@ -574,6 +574,16 @@ def api_list_trash(pid: int):
         conn.close()
 
 
+@app.get("/api/trash")
+def api_list_all_trash():
+    """回收站：全部项目的已删草稿（回收站 UI 入口用）。"""
+    conn = _conn()
+    try:
+        return {"trash": db.list_trash(conn, None)}
+    finally:
+        conn.close()
+
+
 @app.delete("/api/projects/{pid}")
 def api_delete_project(pid: int):
     conn = _conn()
