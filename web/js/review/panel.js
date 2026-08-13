@@ -48,6 +48,9 @@ export async function runReview(aid) {
 
 function renderPanel(reviewId, aid, issues, profile, selection) {
   setAnchorMap(issues); // 供锚点定位回查
+  const fixMode = {};
+  (profile.rules || []).forEach(r => { fixMode[r.id] = r.fix_mode || 'advisory'; });
+  const isAdvisory = i => (fixMode[i.rule_id] || 'advisory') === 'advisory';
   document.querySelectorAll('.ai-card.review-panel').forEach(c => c.remove());
   const card = document.createElement('div');
   card.className = 'ai-card review-panel';
@@ -77,7 +80,7 @@ function renderPanel(reviewId, aid, issues, profile, selection) {
         </div>
         <div class="rv-reason">${escapeHtml(i.reason || '')}</div>
         <div class="rv-acts">
-          <button class="mini2" data-x="accept">采用</button>
+          ${isAdvisory(i) ? '<span class="rv-advisory">仅提示，需人工处理</span>' : '<button class="mini2" data-x="accept">采用</button>'}
           ${i.anchor && i.anchor.original_text ? '<button class="mini2" data-x="find">帮我查</button>' : ''}
           <button class="mini2" data-x="ignore">忽略</button>
         </div>
@@ -88,7 +91,8 @@ function renderPanel(reviewId, aid, issues, profile, selection) {
         if (e.target.closest('[data-x]')) return;
         highlightAnchor(item.dataset.iid);
       });
-      item.querySelector('[data-x="accept"]').onclick = async e => {
+      const accBtn = item.querySelector('[data-x="accept"]');
+      if (accBtn) accBtn.onclick = async e => {
         e.stopPropagation();
         try {
           const r = await reviewApi(`/api/reviews/${reviewId}/issues/${iid}/accept`, { method: 'POST' });

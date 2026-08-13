@@ -19,7 +19,16 @@ const ISSUES = [
   { id: 2, review_id: 1, fingerprint: 'f2', rule_id: 'common.markdown.unsafe-url', severity: 'error',
     anchor: { block_id: 'b3', start_utf16: 3, end_utf16: 31, original_text: '[危险](javascript:alert(1))' },
     suggestion: '见 [危险](https://example.com) 链接', reason: '不安全链接协议：javascript://', source_type: 'system', state: 'open' },
+  { id: 3, review_id: 1, fingerprint: 'f3', rule_id: 'common.language.repeated-word', severity: 'suggestion',
+    anchor: { block_id: 'b3', start_utf16: 0, end_utf16: 4, original_text: '出现了了' },
+    suggestion: '', reason: '疑似重复字', source_type: 'experience', state: 'open' },
 ];
+
+const PROFILE = { rules: [
+  { id: 'common.heading.empty', fix_mode: 'exact_patch' },
+  { id: 'common.markdown.unsafe-url', fix_mode: 'exact_patch' },
+  { id: 'common.language.repeated-word', fix_mode: 'advisory' },
+] };
 
 test('成稿检查：启动→列表→忽略→采用主稿修复→复检', async ({ page }) => {
   const accepted = [];
@@ -45,7 +54,7 @@ test('成稿检查：启动→列表→忽略→采用主稿修复→复检', as
     return r.fulfill({ json: { action: 'master', new_version: 4, block_id: 'b3' } });
   });
   await page.route('**/api/reviews/1/recheck', r => r.fulfill({ json: { review_id: 2 } }));
-  await page.route('**/api/reviews', r => r.fulfill({ json: { review_id: 1, issues: ISSUES, profile: {} } }));
+  await page.route('**/api/reviews', r => r.fulfill({ json: { review_id: 1, issues: ISSUES, profile: PROFILE } }));
 
   await page.goto('http://127.0.0.1:8790/');
   await page.click('.proj');
@@ -58,8 +67,12 @@ test('成稿检查：启动→列表→忽略→采用主稿修复→复检', as
   await expect(page.locator('.rl-info')).toContainText('通用基础规则');
   await page.click('#rl-run');
   await page.waitForSelector('.ai-card.review-panel .rv-item');
-  await expect(page.locator('.rv-item')).toHaveCount(2);
+  await expect(page.locator('.rv-item')).toHaveCount(3);
   await expect(page.locator('.rv-item').first()).toContainText('空标题');
+
+  // advisory 问题：显示"仅提示"，无"采用"按钮
+  await expect(page.locator('.rv-item[data-iid="3"]')).toContainText('仅提示');
+  await expect(page.locator('.rv-item[data-iid="3"] [data-x="accept"]')).toHaveCount(0);
 
   // 定位：点击 issue → 对应 block 高亮
   await page.click('.rv-item[data-iid="2"]');
@@ -68,7 +81,7 @@ test('成稿检查：启动→列表→忽略→采用主稿修复→复检', as
   // 忽略第一条
   await page.click('.rv-item[data-iid="1"] [data-x="ignore"]');
   await page.waitForTimeout(300);
-  await expect(page.locator('.rv-item')).toHaveCount(1);
+  await expect(page.locator('.rv-item')).toHaveCount(2);
 
   // 筛选按钮存在
   await expect(page.locator('.rv-filter')).toContainText('错误');

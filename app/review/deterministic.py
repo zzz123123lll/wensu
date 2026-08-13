@@ -7,6 +7,8 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
+from app.review import sensitive_words
+
 # 重复标点（同一标点连续 2+）：。，、；：！？…
 DUP_PUNCT = re.compile(r"([。，、；：！？…])\1+")
 # 重复词（同一汉字连续 2+）
@@ -164,6 +166,37 @@ def _missing_source(snap, params):
     return out
 
 
+def _sensitive(snap, params, rule_id, severity, defaults):
+    """本地敏感词扫描（类别级报告，绝不回显命中词）。"""
+    raw = str(params.get("categories", "") or "")
+    cats = tuple(c.strip() for c in raw.split(",") if c.strip()) or defaults
+    out = []
+    for b in snap["blocks"]:
+        text = b.get("text") or ""
+        if not text.strip():
+            continue
+        hits = sensitive_words.scan_hits(text, cats)
+        if not hits:
+            continue
+        total = sum(h["hits"] for h in hits)
+        cats_hit = "、".join(h["category"] for h in hits)
+        out.append(_issue(
+            rule_id, severity, b["id"], 0, len(text), text,
+            f"本地敏感词命中 {total} 处（类别：{cats_hit}），发布前请人工复核",
+            suggestion="删除或改写相关表述后复检", source_type="experience"))
+    return out
+
+
+def _sensitive_critical(snap, params):
+    return _sensitive(snap, params, "wechat.compliance.sensitive-critical", "error",
+                      sensitive_words.CRITICAL_CATEGORIES)
+
+
+def _sensitive_advisory(snap, params):
+    return _sensitive(snap, params, "wechat.compliance.sensitive-advisory", "warning",
+                      sensitive_words.ADVISORY_CATEGORIES)
+
+
 _IMPL = {
     "common.heading.order": _heading_order,
     "common.heading.empty": _heading_empty,
@@ -175,6 +208,8 @@ _IMPL = {
     "common.language.long-sentence": _long_sentence,
     "common.evidence.orphan-citation": _orphan_citation,
     "common.evidence.missing-source": _missing_source,
+    "wechat.compliance.sensitive-critical": _sensitive_critical,
+    "wechat.compliance.sensitive-advisory": _sensitive_advisory,
 }
 
 

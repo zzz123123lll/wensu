@@ -8,7 +8,7 @@ import json
 import os
 
 from app import db
-from app.review import deterministic, pack_loader, repository, resolver
+from app.review import deterministic, repository, resolver
 
 
 def _snapshot_hash(blocks, citations) -> str:
@@ -128,6 +128,8 @@ def accept_issue(conn, review_id: int, issue_id: int) -> dict:
         raise ValueError("检查未完成，不能采用")
 
     rule = next((r for r in s["profile"]["rules"] if r["id"] == issue["rule_id"]), None)
+    if (rule or {}).get("fix_mode") == "advisory":
+        raise ValueError("该问题仅为提示（advisory），不可直接采用")
     scope = (rule or {}).get("scope", "master")
     anchor = issue["anchor"]
     suggestion = issue.get("suggestion") or ""

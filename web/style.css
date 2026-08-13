@@ -112,7 +112,8 @@ body {
 .rv-rule { font-size: 11px; color: var(--fg-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-scope { font-size: 10.5px; color: var(--fg-3); }
 .rv-reason { font-size: 12px; margin: 5px 0; }
-.rv-acts { display: flex; gap: 6px; }
+.rv-acts { display: flex; gap: 6px; align-items: center; }
+.rv-advisory { font-size: 11px; color: var(--fg-3); padding: 3px 0; }
 .rv-flash { animation: rvflash 1.6s ease; border-radius: 6px; }
 @keyframes rvflash { 0% { background: rgba(0,113,227,0.18); } 100% { background: transparent; } }
 .rv-foot { margin-top: 8px; }
