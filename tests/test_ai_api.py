@@ -28,7 +28,7 @@ def test_ask_success(tmp_path, monkeypatch):
 
 def test_rewrite_success(tmp_path, monkeypatch):
     c = _client(tmp_path)
-    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t: [{"label": "方案一", "text": "改"}])
+    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t, flavor="default": [{"label": "方案一", "text": "改"}])
     r = c.post("/api/ai/rewrite", json={"text": "原文"})
     assert r.status_code == 200
     assert r.json()["candidates"][0]["text"] == "改"
@@ -86,7 +86,7 @@ def test_check_empty_claim_400(tmp_path):
 
 def test_rewrite_echoes_anchor(tmp_path, monkeypatch):
     c = _client(tmp_path)
-    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t: [{"label": "方案一", "text": "改"}])
+    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t, flavor="default": [{"label": "方案一", "text": "改"}])
     sel = {"text": "选中文字", "start_utf16": 3, "end_utf16": 7}
     r = c.post("/api/ai/rewrite", json={
         "text": "原文", "article_id": 7, "target_block_id": "b1", "selection": sel,
@@ -118,7 +118,7 @@ def test_check_echoes_anchor(tmp_path, monkeypatch):
 
 def test_anchor_optional_no_anchor_in_response(tmp_path, monkeypatch):
     c = _client(tmp_path)
-    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t: [{"label": "方案一", "text": "改"}])
+    monkeypatch.setattr(ai_service, "rewrite", lambda conn, t, flavor="default": [{"label": "方案一", "text": "改"}])
     r = c.post("/api/ai/rewrite", json={"text": "原文"})
     assert r.status_code == 200
     assert r.json()["anchor"]["article_id"] is None

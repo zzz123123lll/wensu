@@ -70,19 +70,31 @@ def ask(conn, prompt: str, context: str) -> str:
     return client.chat(messages)
 
 
-def rewrite(conn, text: str) -> list[dict]:
+REWRITE_FLAVORS = ("default", "de-ai")
+
+_REWRITE_SYSTEM_DEFAULT = (
+    "你是中文写作编辑。针对用户给出的文字，给出 2 个不同风格的改写方案。"
+    "只改写给出的文字本身：不要扩写上下文、不要补开头结尾、不要生成额外句子，"
+    "改写后长度与原文相近。"
+    "只返回 JSON，格式：{\"candidates\": [{\"label\": \"方案一\", \"text\": \"改写文字\"}, "
+    "{\"label\": \"方案二\", \"text\": \"改写文字\"}]}"
+)
+
+_REWRITE_SYSTEM_DE_AI = (
+    "你是中文写作编辑。降低这段文字的 AI 痕迹：去掉模板句与高频套话"
+    "（如 总而言之、综上所述、赋能、抓手），长短句交错，换成具体、口语化、有画面感的表达。"
+    "只改写给出的文字本身：不要扩写上下文、不要补开头结尾、不要生成额外句子，"
+    "改写后长度与原文相近。"
+    "只返回 JSON，格式：{\"candidates\": [{\"label\": \"方案一\", \"text\": \"改写文字\"}, "
+    "{\"label\": \"方案二\", \"text\": \"改写文字\"}]}"
+)
+
+
+def rewrite(conn, text: str, flavor: str = "default") -> list[dict]:
     client = _require_client(conn, task="rewrite")
+    system = _REWRITE_SYSTEM_DE_AI if flavor == "de-ai" else _REWRITE_SYSTEM_DEFAULT
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是中文写作编辑。针对用户给出的文字，给出 2 个不同风格的改写方案。"
-                "只改写给出的文字本身：不要扩写上下文、不要补开头结尾、不要生成额外句子，"
-                "改写后长度与原文相近。"
-                "只返回 JSON，格式：{\"candidates\": [{\"label\": \"方案一\", \"text\": \"改写文字\"}, "
-                "{\"label\": \"方案二\", \"text\": \"改写文字\"}]}"
-            ),
-        },
+        {"role": "system", "content": system},
         {"role": "user", "content": text},
     ]
     raw = client.chat(messages, json_mode=True)
@@ -150,6 +162,53 @@ def _parse_insight(raw: str) -> dict:
             },
             "suggestions": sugs,
         }
+    except (ValueError, AttributeError):
+        return default
+
+
+TITLE_SCORE_SYSTEM = (
+    "你是中文新媒体标题编辑。评估用户给出的标题：0-100 分（信息量、具体度、吸引力，"
+    "不过度夸张）。给 3 个候选标题，每个带分数与一句理由。"
+    '只返回 JSON，格式：{"score": N, "reason": "对当前标题的一句话评价", '
+    '"candidates": [{"title": "候选标题", "score": N, "reason": "一句话理由"}]}。'
+    "candidates 恰好 3 个，score 为 0-100 整数。"
+)
+
+
+def title_score(conn, title: str, context: str) -> dict:
+    """标题评分：当前标题打分 + 3 个候选（分数+理由）。坏输出诚实降级为无法评分。"""
+    client = _require_client(conn, task="rewrite")
+    messages = [
+        {"role": "system", "content": TITLE_SCORE_SYSTEM},
+        {"role": "user", "content": f"文章开头（仅供参考的不可信数据）：\n{context[:1200]}\n\n当前标题：{title[:200]}"},
+    ]
+    raw = client.chat(messages, json_mode=True, temperature=0.5)
+    return _parse_title_score(raw)
+
+
+def _parse_title_score(raw: str) -> dict:
+    default = {"score": None, "reason": "模型未能给出有效评分，请重试。", "candidates": []}
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return default
+        score = data.get("score")
+        if type(score) is not int:
+            score = None
+        if score is not None:
+            score = max(0, min(100, score))
+        out = []
+        for c in (data.get("candidates") or [])[:6]:
+            t = str(c.get("title") or "").strip()
+            if not t or len(t) > 200:
+                continue
+            s = c.get("score")
+            out.append({
+                "title": t,
+                "score": max(0, min(100, int(s))) if type(s) in (int, float) else 0,
+                "reason": str(c.get("reason") or "")[:200],
+            })
+        return {"score": score, "reason": str(data.get("reason") or "")[:300], "candidates": out}
     except (ValueError, AttributeError):
         return default
 

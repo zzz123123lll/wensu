@@ -169,6 +169,12 @@ class AnchorMixin(BaseModel):
 
 class RewriteIn(AnchorMixin):
     text: str
+    flavor: str = "default"  # default | de-ai（去 AI 味）
+
+
+class TitleScoreIn(BaseModel):
+    title: str
+    context: str = ""
 
 
 class InsightIn(BaseModel):
@@ -477,13 +483,34 @@ def api_ai_ask(body: AskIn):
 
 @app.post("/api/ai/rewrite")
 def api_ai_rewrite(body: RewriteIn):
+    if body.flavor not in ai_service.REWRITE_FLAVORS:
+        raise HTTPException(400, f"未知改写模式：{body.flavor}")
     conn = _conn()
     try:
         return {
-            "candidates": ai_service.rewrite(conn, body.text),
+            "candidates": ai_service.rewrite(conn, body.text, flavor=body.flavor),
             "anchor": _anchor(body),
             "model": ai_service.model_name_for(conn, "rewrite"),
         }
+    except LLMError as e:
+        raise _ai_error(e)
+    finally:
+        conn.close()
+
+
+@app.post("/api/ai/title-score")
+def api_ai_title_score(body: TitleScoreIn):
+    """标题评分：当前标题打分 + 3 个候选（分数+理由）。AI 只递候选，不自动写入标题。"""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    if len(title) > 200:
+        raise HTTPException(400, "标题过长（最多 200 字）")
+    conn = _conn()
+    try:
+        out = ai_service.title_score(conn, title, body.context or "")
+        out["model"] = ai_service.model_name_for(conn, "rewrite")
+        return out
     except LLMError as e:
         raise _ai_error(e)
     finally:

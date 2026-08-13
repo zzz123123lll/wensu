@@ -111,9 +111,15 @@ function scheduleSave(aid) {
 
 export async function saveNow(aid, reason = 'autosave', extra = {}) {
   const st = sstate(aid);
-  if (!st.dirty) return { ok: true, status: st.status };
-  if (st.inFlight) { st.pendingAfterSave = true; return { ok: false, status: 'in-flight' }; } // 在途：标记，ACK 后发最新
+  if (!st.dirty && !extra.title) return { ok: true, status: st.status };
+  if (st.inFlight) {
+    st.pendingAfterSave = true;
+    if (extra.title) st.pendingTitle = extra.title;  // 在途保存结束后补发标题
+    return { ok: false, status: 'in-flight' };
+  }
   const snapshot = collectBlocks();
+  const sentTitle = extra.title || st.pendingTitle || null;
+  st.pendingTitle = null;
   st.dirty = false;
   st.inFlight = { aid, revision: st.editRevision, hash: st.snapshotHash };
   setSaveStatus(st, 'saving');
@@ -135,6 +141,7 @@ export async function saveNow(aid, reason = 'autosave', extra = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         blocks: snapshot, base_version: st.baseVersion, change_reason: reason,
+        title: sentTitle,
         source_object_type: extra.source_object_type || '',
         source_object_id: extra.source_object_id || '',
       }),

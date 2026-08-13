@@ -127,7 +127,7 @@ function openArticle(aid) {
 
     let html = `<div class="art-title">${escapeHtml(a.title)}</div>`;
     html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span>
-      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-review">成稿检查</button><button class="mini2" id="btn-export">导出</button></span></div>`;
+      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-review">成稿检查</button><button class="mini2" id="btn-title">标题评分</button><button class="mini2" id="btn-export">导出</button></span></div>`;
     if (a.blocks.length === 0) {
       html += `<div class="blk edit empty" contenteditable="true" data-bid="${crypto.randomUUID()}"></div>`;
     } else {
@@ -149,6 +149,8 @@ function openArticle(aid) {
       else if (fmt === '3') location.href = `/api/articles/${aid}/export?format=docx`;
       else if (fmt === '4') location.href = `/api/articles/${aid}/export?format=wechat`;
     });
+    const bt = $('#btn-title');
+    if (bt) bt.addEventListener('click', () => runTitleScore(aid));
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     restoreEditorPosition(aid); // P1-5：恢复上次位置（不强制 scrollTop=0）
@@ -977,7 +979,7 @@ function anchorFor(target, selection) {
   };
 }
 
-async function runRewrite(target) {
+async function runRewrite(target, flavor = 'default') {
   if (!requireCfg()) return;
   target = target || firstBlock();
   if (!target) { toast_('先写点什么再改写'); return; }
@@ -986,12 +988,12 @@ async function runRewrite(target) {
   if (!text) { toast_('这一段还是空的'); return; }
   const card = document.createElement('div');
   card.className = 'ai-card';
-  card.innerHTML = '<div class="ai-head">正在改写…</div>';
+  card.innerHTML = `<div class="ai-head">${flavor === 'de-ai' ? '正在去 AI 味改写…' : '正在改写…'}</div>`;
   target.after(card);
   try {
     const r = await api('/api/ai/rewrite', {
       method: 'POST',
-      body: JSON.stringify({ text: text.slice(0, 2000), ...anchorFor(target, sel) }),
+      body: JSON.stringify({ text: text.slice(0, 2000), flavor, ...anchorFor(target, sel) }),
     });
     card.innerHTML = '<div class="ai-head">改写候选</div>'
       + r.candidates.map(c => `<div class="opt"><span class="tag">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</div>`).join('')
@@ -1023,6 +1025,47 @@ async function runRewrite(target) {
   }
 }
 $('#tool-rw').addEventListener('click', () => { reportSignal('tool_click', { tool: 'rewrite', focus: 'block' }); runRewrite(anchorFromSel()); });
+$('#tool-deai').addEventListener('click', () => { reportSignal('tool_click', { tool: 'deai', focus: 'block' }); runRewrite(anchorFromSel(), 'de-ai'); });
+
+/* ========== 标题评分（P0-②c）：打分 + 候选，采用即写回标题，不自动写入 ========== */
+async function runTitleScore(aid) {
+  if (!requireCfg()) return;
+  const title = ($('#doc-title').textContent || '').trim();
+  if (!title || title === '选择一篇草稿开始') { toast_('先打开一篇草稿，并给它一个标题'); return; }
+  const firstBlocks = Array.from(document.querySelectorAll('#article .blk.edit')).slice(0, 2)
+    .map(b => b.textContent.trim()).filter(Boolean).join('\n');
+  const card = document.createElement('div');
+  card.className = 'ai-card';
+  card.innerHTML = '<div class="ai-head">正在评分标题…</div>';
+  document.getElementById('cardflow').prepend(card);
+  try {
+    const r = await api('/api/ai/title-score', {
+      method: 'POST',
+      body: JSON.stringify({ title, context: firstBlocks.slice(0, 1200) }),
+    });
+    const rows = r.candidates.map(c => `
+      <div class="opt"><span class="tag">${c.score} 分</span>${escapeHtml(c.title)}
+        <span class="ts-reason">${escapeHtml(c.reason)}</span></div>
+      <div class="acts"><button class="btn btn-p" data-x="adopt" data-title="${escapeHtml(c.title)}">采用此标题</button></div>`).join('');
+    card.innerHTML = '<div class="ai-head">标题评分'
+      + (r.score !== null ? ` <span class="tag">${r.score} 分</span>` : '')
+      + `</div><div class="opt">${escapeHtml(r.reason)}</div>${rows}`
+      + '<div class="acts"><button class="btn btn-g" data-x="cls">关闭</button></div>';
+    card.querySelectorAll('[data-x="adopt"]').forEach(b => b.onclick = async () => {
+      const newTitle = b.dataset.title;
+      $('#doc-title').textContent = newTitle;
+      const artTitle = document.querySelector('.art-title');
+      if (artTitle) artTitle.textContent = newTitle;
+      await saveNow(currentAid, 'ai_rewrite', { title: newTitle });
+      toast_('标题已更新');
+      card.remove();
+    });
+    const cls = card.querySelector('[data-x="cls"]');
+    if (cls) cls.onclick = () => card.remove();
+  } catch (e) {
+    card.innerHTML = '<div class="ai-head">标题评分失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
 $('#ask-send').addEventListener('click', () => { reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 $('#ask-input').addEventListener('keydown', e => { if (e.key === 'Enter') reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 $('#ask-history-btn').addEventListener('click', showAskHistory);

@@ -7,6 +7,7 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
+from app import ai_trace
 from app.review import sensitive_words
 
 # 重复标点（同一标点连续 2+）：。，、；：！？…
@@ -166,6 +167,23 @@ def _missing_source(snap, params):
     return out
 
 
+def _ai_trace_rule(snap, params):
+    """AI 高频表达检测（本地词表，确定性）。"""
+    out = []
+    for b in snap["blocks"]:
+        text = b.get("text") or ""
+        if not text.strip():
+            continue
+        hits = ai_trace.find_ai_phrases(text, limit=3)
+        if not hits:
+            continue
+        out.append(_issue(
+            "common.language.ai-trace", "suggestion", b["id"], 0, len(text), text,
+            f"AI 高频表达 {len(hits)} 处（如：{'、'.join(hits)}），可考虑换成具体、口语化的说法",
+            suggestion="替换模板词、长短句交错，降低 AI 痕迹", source_type="experience"))
+    return out
+
+
 def _sensitive(snap, params, rule_id, severity, defaults):
     """本地敏感词扫描（类别级报告，绝不回显命中词）。"""
     raw = str(params.get("categories", "") or "")
@@ -208,6 +226,7 @@ _IMPL = {
     "common.language.long-sentence": _long_sentence,
     "common.evidence.orphan-citation": _orphan_citation,
     "common.evidence.missing-source": _missing_source,
+    "common.language.ai-trace": _ai_trace_rule,
     "wechat.compliance.sensitive-critical": _sensitive_critical,
     "wechat.compliance.sensitive-advisory": _sensitive_advisory,
 }
