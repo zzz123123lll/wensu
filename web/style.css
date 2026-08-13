@@ -92,6 +92,29 @@ body {
 .mark-menu button { border: none; background: none; padding: 7px 12px; font-size: 13px; text-align: left; border-radius: 7px; cursor: pointer; font-family: inherit; color: var(--fg); }
 .mark-menu button:hover { background: var(--accent-soft); color: var(--accent); }
 .ai-card.sug-card .sug-item .r { font-size: 11px; color: var(--fg-3); margin-top: 3px; }
+/* 成稿检查面板 */
+.review-launcher { position: fixed; z-index: 120; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.16); padding: 18px; width: 320px; display: flex; flex-direction: column; gap: 8px; }
+.review-launcher .rl-head { font-size: 14px; font-weight: 700; }
+.review-launcher label { font-size: 11.5px; color: var(--fg-2); }
+.review-launcher select { border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; padding: 6px 9px; font-size: 12.5px; font-family: inherit; }
+.review-launcher .rl-info { font-size: 11.5px; color: var(--fg-3); }
+.review-launcher .rl-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.rv-filter { display: flex; gap: 5px; margin: 8px 0 6px; }
+.rv-filter .mini2.on { background: var(--accent-soft); color: var(--accent); }
+.rv-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; }
+.rv-item { background: var(--bg); border: 1px solid rgba(0,0,0,0.06); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
+.rv-item:hover { border-color: rgba(0,113,227,0.3); }
+.rv-top { display: flex; align-items: center; gap: 7px; }
+.rv-sev { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px; }
+.rv-sev.e { background: rgba(255,59,48,0.1); color: #d6311f; }
+.rv-sev.w { background: rgba(255,149,0,0.12); color: #c47f00; }
+.rv-sev.s { background: rgba(0,113,227,0.1); color: var(--accent); }
+.rv-rule { font-size: 11px; color: var(--fg-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-scope { font-size: 10.5px; color: var(--fg-3); }
+.rv-reason { font-size: 12px; margin: 5px 0; }
+.rv-acts { display: flex; gap: 6px; }
+.rv-flash { animation: rvflash 1.6s ease; border-radius: 6px; }
+@keyframes rvflash { 0% { background: rgba(0,113,227,0.18); } 100% { background: transparent; } }
 .doc.newdraft { color: var(--fg-3); font-size: 12px; }
 .doc.newdraft:hover { color: var(--accent); background: transparent; }
 

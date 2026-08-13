@@ -5,9 +5,12 @@ import { api } from './api.js';
 import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks, pushUndo, popUndo, renderBlocks } from './state.js';
 import { escapeHtml, safeUrl } from './security.js';
 
+// 供 review 等动态加载模块引用（ES module 顶层声明是模块私有，须显式导出）
+export { toast_, openArticle };
+export let currentAid = null;      // 当前打开草稿 id
+
 let projects = [];          // [{id, name}]
 let expanded = {};          // pid -> bool
-let currentAid = null;      // 当前打开草稿 id
 let currentPid = null;
 let articleReqSeq = 0;  // 打开文章请求序号：迟到的响应不得覆盖新稿
 let insightAbort = null; // 洞察请求取消句柄
@@ -123,7 +126,7 @@ function openArticle(aid) {
 
     let html = `<div class="art-title">${escapeHtml(a.title)}</div>`;
     html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span>
-      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-export">导出</button></span></div>`;
+      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-review">成稿检查</button><button class="mini2" id="btn-export">导出</button></span></div>`;
     if (a.blocks.length === 0) {
       html += `<div class="blk edit empty" contenteditable="true" data-bid="${crypto.randomUUID()}"></div>`;
     } else {
@@ -134,6 +137,8 @@ function openArticle(aid) {
     renderCitationBadges(); // 引用编号由服务端数据计算，badge 不写入正文 text
     const bh = $('#btn-history');
     if (bh) bh.addEventListener('click', showHistory);
+    const br = $('#btn-review');
+    if (br) br.addEventListener('click', () => { import('/js/review/panel.js').then(m => m.runReview(aid)).catch(e => toast_('检查模块加载失败：' + e.message)); });
     const be = $('#btn-export');
     if (be) be.addEventListener('click', () => { location.href = `/api/articles/${aid}/export`; });
     // 高亮左栏当前草稿
