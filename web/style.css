@@ -115,6 +115,14 @@ body {
 .rv-acts { display: flex; gap: 6px; align-items: center; }
 .rv-advisory { font-size: 11px; color: var(--fg-3); padding: 3px 0; }
 .ts-reason { display: block; font-size: 11px; color: var(--fg-3); margin-top: 2px; }
+
+/* 选区浮层（P1-⑤）：选中文字就地工具条 */
+#selbar { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 4px;
+  background: rgba(29,29,31,0.92); backdrop-filter: blur(8px); border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18); }
+#selbar .selbar-btn { border: 0; background: transparent; color: #fff; font-size: 12.5px;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer; line-height: 1; }
+#selbar .selbar-btn:hover { background: rgba(255,255,255,0.16); }
 .rv-flash { animation: rvflash 1.6s ease; border-radius: 6px; }
 @keyframes rvflash { 0% { background: rgba(0,113,227,0.18); } 100% { background: transparent; } }
 .rv-foot { margin-top: 8px; }

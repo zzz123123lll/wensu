@@ -924,6 +924,58 @@ async function showAskHistory() {
   }
 }
 
+/* ========== 选区浮层（P1-⑤）：选中文字 → 就地工具条，问题就近解决 ========== */
+function hideSelbar() {
+  const bar = $('#selbar');
+  if (bar) bar.style.display = 'none';
+}
+
+function showSelbar(rect) {
+  const bar = $('#selbar');
+  if (!bar) return;
+  bar.style.display = '';
+  const w = bar.offsetWidth, h = bar.offsetHeight;
+  let left = rect.left + rect.width / 2 - w / 2;
+  let top = rect.top - h - 8;
+  if (top < 4) top = rect.bottom + 8; // 选区贴近顶部时放下方
+  left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
+  top = Math.max(4, Math.min(top, window.innerHeight - h - 4));
+  bar.style.left = left + 'px';
+  bar.style.top = top + 'px';
+}
+
+function initSelbar() {
+  const bar = $('#selbar');
+  if (!bar) return;
+  let composing = false;
+  document.addEventListener('compositionstart', () => { composing = true; });
+  document.addEventListener('compositionend', () => { composing = false; });
+  document.addEventListener('selectionchange', () => {
+    if (composing) return;
+    const s = window.getSelection();
+    const block = anchorFromSel();
+    if (!s || s.isCollapsed || !block || !block.closest('#article')) { hideSelbar(); return; }
+    const text = s.toString().trim();
+    if (!text) { hideSelbar(); return; }
+    const rect = s.getRangeAt(0).getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) { hideSelbar(); return; }
+    showSelbar(rect);
+  });
+  document.addEventListener('scroll', hideSelbar, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideSelbar(); });
+  bar.querySelectorAll('.selbar-btn').forEach(b => b.addEventListener('mousedown', e => {
+    e.preventDefault(); // 保持选区不因点击而丢失
+    const t = b.dataset.t;
+    reportSignal('selbar_click', { tool: t, focus: 'selection' });
+    const target = anchorFromSel();
+    if (t === 'rewrite') runRewrite(target);
+    else if (t === 'deai') runRewrite(target, 'de-ai');
+    else if (t === 'search') runSearch(target);
+    else if (t === 'check') runCheck(target);
+    hideSelbar();
+  }));
+}
+
 /* ========== 改写链路 ========== */
 function anchorFromSel() {
   const s = window.getSelection();
@@ -1683,5 +1735,6 @@ window.addEventListener('resize', () => { if (window.innerWidth >= 1100) closeDr
 /* 启动时获取随机 session token（HttpOnly cookie，后续写请求自动携带） */
 fetch('/api/session').catch(() => {});
 
+initSelbar();
 loadProjects();
 loadSettings();
