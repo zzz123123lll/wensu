@@ -1,0 +1,68 @@
+{
+  "pack_id": "opinion-essay",
+  "pack_version": "1.0.0",
+  "name": "观点长文",
+  "description": "文章类型：中心论点、段落关系、论据覆盖、重复与语气一致性（AI 建议 + 编辑经验，无平台硬规则）。",
+  "rules": [
+    {
+      "id": "opinion.argument.thesis",
+      "name": "中心论点明确",
+      "description": "开头段落应有明确中心论点",
+      "pack_id": "opinion-essay",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "ai",
+      "scope": "master",
+      "severity": "warning",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "编辑经验：观点文章结构"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "opinion.argument.evidence",
+      "name": "论据覆盖",
+      "description": "论点应有对应论据支撑",
+      "pack_id": "opinion-essay",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "ai",
+      "scope": "master",
+      "severity": "warning",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "编辑经验：论证完整性"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "opinion.language.repetition",
+      "name": "跨段重复",
+      "description": "不同段落表达同一观点时应合并或明确递进",
+      "pack_id": "opinion-essay",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "ai",
+      "scope": "master",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "编辑经验：避免重复"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "opinion.tone.consistency",
+      "name": "语气一致",
+      "description": "全文语气应与文体 Profile 一致",
+      "pack_id": "opinion-essay",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "ai",
+      "scope": "master",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "编辑经验：语气一致性"},
+      "fix_mode": "advisory"
+    }
+  ]
+}
