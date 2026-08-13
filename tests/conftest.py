@@ -10,6 +10,8 @@
 import os
 import sys
 
+import pytest
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 移除 Hermes venv / 其他项目注入的路径，避免解释器版本错配
@@ -17,6 +19,18 @@ sys.path = [p for p in sys.path if "hermes-agent" not in p]
 
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+import app.db as db_mod  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    """测试数据纪律：默认把 DB_PATH 指向临时目录。
+
+    杜绝测试触碰真实 data/workbench.db（含真实 API Key）触发真实模型调用；
+    各测试仍可显式设置自己的 DB_PATH 覆盖本默认值。
+    """
+    monkeypatch.setattr(db_mod, "DB_PATH", str(tmp_path / "test.db"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 

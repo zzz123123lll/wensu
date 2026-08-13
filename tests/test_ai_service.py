@@ -17,6 +17,12 @@ def _clear_search_cache():
     ai_service._SEARCH_CACHE.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_engines(monkeypatch):
+    """默认 stub 中文引擎（不碰公网）；需要引擎结果的测试自行覆盖。"""
+    monkeypatch.setattr(ai_service.search_engines, "search_all", lambda q: ([], []))
+
+
 class FakeClient:
     def __init__(self, replies):
         self.replies = list(replies)
@@ -161,9 +167,32 @@ def test_check_evidence_binds_to_prompt_and_response(monkeypatch):
 # ---------- search（真搜索，零 key 源） ----------
 
 def test_search_wikipedia_first_then_ddg(monkeypatch):
-    w = [{"title": "维基条目", "url": "u", "snippet": "s"}]
+    """合并语义：Wikipedia 与 DDG 结果合并，Wikipedia 在前。"""
+    w = [{"title": "维基条目", "url": "u1", "snippet": "s"}]
     monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: w)
-    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [{"title": "X", "url": "", "snippet": ""}])
+    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [{"title": "X", "url": "u2", "snippet": ""}])
+    out = ai_service.search(None, "q")
+    assert len(out) == 2
+    assert out[0]["title"] == "维基条目"
+    assert out[1]["title"] == "X"
+
+
+def test_search_merges_engine_results(monkeypatch):
+    """中文引擎结果并入合并流（去重后截断 5）。"""
+    monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: [])
+    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [])
+    eng = [{"title": "引擎%d" % i, "url": "e%d" % i, "snippet": "s"} for i in range(6)]
+    monkeypatch.setattr(ai_service.search_engines, "search_all", lambda q: (eng, []))
+    out = ai_service.search(None, "q")
+    assert len(out) == 5
+    assert out[0]["title"] == "引擎0"
+
+
+def test_search_dedupes_across_sources(monkeypatch):
+    """同 URL 跨源去重。"""
+    w = [{"title": "维基条目", "url": "same", "snippet": "s"}]
+    monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: w)
+    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [{"title": "重复", "url": "same", "snippet": ""}])
     out = ai_service.search(None, "q")
     assert len(out) == 1
     assert out[0]["title"] == "维基条目"
@@ -207,8 +236,9 @@ def test_model_search_bad_json_gives_friendly_hint(monkeypatch):
 
 
 def test_search_caps_at_five(monkeypatch):
-    many = [{"title": "t%d" % i, "url": "u", "snippet": "s"} for i in range(8)]
+    many = [{"title": "t%d" % i, "url": "u%d" % i, "snippet": "s"} for i in range(8)]
     monkeypatch.setattr(ai_service, "_wikipedia_search", lambda q: many)
+    monkeypatch.setattr(ai_service, "_ddg_search", lambda q: [])
     out = ai_service.search(None, "q")
     assert len(out) == 5
 

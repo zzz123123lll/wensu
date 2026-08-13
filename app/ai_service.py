@@ -10,9 +10,9 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app import db, safe_fetch
+from app import db, safe_fetch, search_engines
 from app.llm import LLMClient, LLMError
 from app.settings import get_api_key, get_settings
 
@@ -172,10 +172,7 @@ def search(conn, query: str) -> list[dict]:
     results: dict[str, list[dict]] = {"web": [], "model": []}
 
     def do_web():
-        r = _wikipedia_search(query)
-        if not r:
-            r = _ddg_search(query)
-        results["web"] = r
+        results["web"] = _web_sources(query)
 
     def do_model():
         c2 = None
@@ -208,6 +205,36 @@ def search(conn, query: str) -> list[dict]:
             for k in list(_SEARCH_CACHE)[: len(_SEARCH_CACHE) - _SEARCH_CACHE_MAX]:
                 _SEARCH_CACHE.pop(k, None)
     return out
+
+
+def _web_sources(query: str, cap: int = 5) -> list[dict]:
+    """并发执行全部 web 源：Wikipedia、DuckDuckGo API 与中文引擎（Bing/360/搜狗/百度/DDG-html）。
+
+    合并按声明顺序、按 URL 去重、截断 cap；单源失败不影响其他源。
+    """
+    sources = [
+        ("wikipedia", lambda: _wikipedia_search(query)),
+        ("ddg", lambda: _ddg_search(query)),
+        ("engines", lambda: search_engines.search_all(query)[0]),
+    ]
+    by_name: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=len(sources)) as ex:
+        futures = {ex.submit(fn): name for name, fn in sources}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                by_name[name] = future.result() or []
+            except Exception:
+                by_name[name] = []
+    merged, seen = [], set()
+    for name in ("wikipedia", "ddg", "engines"):
+        for r in by_name.get(name, []):
+            key = r.get("url") or r.get("title")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+    return merged[:cap]
 
 
 def search_stream(conn, query: str):

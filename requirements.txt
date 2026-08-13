@@ -3,3 +3,4 @@ uvicorn
 pytest
 httpx
 python-docx
+beautifulsoup4==4.13.4

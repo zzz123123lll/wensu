@@ -9,6 +9,7 @@ dependencies = [
     "httpx==0.28.1",
     "pydantic==2.13.4",
     "python-docx>=1.1.0",
+    "beautifulsoup4==4.13.4",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +25,7 @@ wensu = "app.cli:main"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-"app.review" = ["packs/*.json"]
+"app.review" = ["packs/*.json", "*.txt"]
 
 [tool.setuptools.data-files]
 "web" = ["web/index.html", "web/style.css"]
