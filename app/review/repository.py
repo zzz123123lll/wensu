@@ -52,15 +52,22 @@ def list_sessions(conn, article_id: int, limit: int = 10) -> list[dict]:
 # ---------- Issue ----------
 
 def add_issues(conn, review_id: int, issues: list[dict]) -> None:
+    """插入 issues；同 review 同 fingerprint 已存在则跳过（stream 重试幂等）。"""
+    existing = {r["fingerprint"] for r in conn.execute(
+        "SELECT fingerprint FROM review_issues WHERE review_id = ?", (review_id,)).fetchall()}
     for i in issues:
+        fp = i.get("fingerprint")
+        if fp in existing:
+            continue
         conn.execute(
             "INSERT INTO review_issues (review_id, fingerprint, rule_id, severity, anchor_json,"
             " suggestion_json, reason, source_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (review_id, i["fingerprint"], i["rule_id"], i["severity"],
+            (review_id, fp, i["rule_id"], i["severity"],
              json.dumps(i.get("anchor", {}), ensure_ascii=False),
              json.dumps(i.get("suggestion", ""), ensure_ascii=False),
              i.get("reason", ""), i.get("source_type", "system"), _now()),
         )
+        existing.add(fp)
     conn.commit()
 
 

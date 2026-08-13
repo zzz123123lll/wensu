@@ -22,21 +22,29 @@ export async function runReview(aid) {
       method: 'POST',
       body: JSON.stringify({ article_id: aid, profile_selection: sel }),
     });
-    const issues = await readStreamIssues(created.review_id);
+    const issues = await readStreamIssues(created.review_id, ev => {
+      if (ev.type === 'stage' && ev.stage) {
+        const label = { prepare: '准备快照', format: '格式检查', content: '内容与语义检查（AI）', evidence: '证据检查' }[ev.stage] || ev.stage;
+        const status = ev.status === 'done' ? '完成' : '进行中';
+        busy.innerHTML = `<div class="ai-head">成稿检查</div><div class="opt">${label}：${status}${ev.count !== undefined ? '（' + ev.count + ' 项）' : ''}…</div>`;
+      }
+      if (ev.type === 'warning') busy.innerHTML = `<div class="ai-head">成稿检查</div><div class="opt">${escapeHtml(ev.message)}</div>`;
+    });
     busy.remove();
     renderPanel(created.review_id, aid, issues, created.profile, sel);
   } catch (e) {
     busy.innerHTML = '<div class="ai-head">成稿检查失败</div><div class="opt">' + escapeHtml(e.message) + '</div>';
   }
-}
+  }
 
-async function readStreamIssues(reviewId) {
+  async function readStreamIssues(reviewId, onEvent) {
   const issues = [];
   await readReviewStream(`/api/reviews/${reviewId}/stream`, ev => {
+    if (onEvent) onEvent(ev);
     if (ev.type === 'issue') issues.push(ev.issue);
   });
   return issues;
-}
+  }
 
 function renderPanel(reviewId, aid, issues, profile, selection) {
   setAnchorMap(issues); // 供锚点定位回查
