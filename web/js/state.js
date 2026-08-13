@@ -195,7 +195,7 @@ export function showConflict(aid, serverVersion) {
 export function collectBlocks() {
   return Array.from(document.querySelectorAll('#article .blk.edit')).map(d => ({
     id: d.dataset.bid, // 稳定 ID（Enter 时已生成 UUID；旧数据保留原 ID）
-    type: d.tagName === 'H2' ? 'heading' : (d.tagName === 'BLOCKQUOTE' ? 'blockquote' : 'paragraph'),
+    type: d.tagName === 'H2' ? 'heading2' : d.tagName === 'H3' ? 'heading3' : (d.tagName === 'BLOCKQUOTE' ? 'blockquote' : 'paragraph'),
     text: d.textContent,
     attrs: {},
   }));
@@ -223,7 +223,10 @@ export function popUndo(aid) {
 export function renderBlocks(blocks) {
   $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
     blocks.map(b => {
-      if (b.type === 'heading') return `<h2 class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</h2>`;
+      if (b.type === 'heading' || b.type === 'heading2' || b.type === 'heading3') {
+        const tag = b.type === 'heading3' ? 'h3' : 'h2';
+        return `<${tag} class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</${tag}>`;
+      }
       if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
       return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
     }).join('');

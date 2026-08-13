@@ -10,7 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 
 BLOCK_TYPES = (
     "paragraph",
-    "heading",
+    "heading",      # H1
+    "heading2",     # H2（编辑器产生，保留层级信息）
+    "heading3",     # H3
+    "heading4",     # H4
     "blockquote",
     "unordered_list",
     "ordered_list",

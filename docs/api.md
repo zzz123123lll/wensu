@@ -54,6 +54,27 @@
 | PUT | /api/bindings | `{task, profile_id}`（ask/rewrite/insight/search_synthesis/check） |
 | POST | /api/profiles/{pid}/test | 连接测试（不存内容） |
 
+## 成稿检查（review）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /api/review/packs | 规则包列表（内置 8 个：common/观点长文/公众号/知乎/头条/博客/学术/报告） |
+| PUT | /api/review/rules/{id} | 规则 override（params/severity/enabled/fix_mode） |
+| DELETE | /api/review/rules/{id} | 删除 override = 恢复默认 |
+| POST | /api/review/custom-rules | 新增自定义规则（全 schema 校验） |
+| POST | /api/review/rules/import | 两阶段导入·预览（返回 token，不安装） |
+| POST | /api/review/rules/import/confirm | 两阶段导入·确认安装（10 分钟有效） |
+| POST | /api/reviews | 创建检查 session（快照+确定性同步返回） |
+| GET | /api/reviews/{id}/stream | NDJSON 流式：stage→issue*→done（AI 语义/证据阶段） |
+| POST | /api/reviews/{id}/issues/{iid}/accept | 逐项采用（主稿走保存 revision/渠道建补丁） |
+| POST | /api/reviews/{id}/issues/{iid}/ignore | 忽略（fingerprint 跳过后续） |
+| POST | /api/reviews/{id}/recheck | 复检（新 session） |
+| POST | /api/reviews/{id}/exports | 双版本导出（通用/渠道 + 摘要 manifest） |
+| GET | /api/review-exports/{eid}/{kind} | 下载 general/channel Markdown 或 report 摘要 |
+
+阶段顺序：prepare → format（确定性）→ content（AI 语义）→ evidence（证据）→ done；
+AI/证据失败不阻塞，warning 事件告知；stream 重试幂等（同 fingerprint 不重复）。
+
 ## 系统
 
 | 方法 | 路径 | 说明 |

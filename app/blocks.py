@@ -95,6 +95,9 @@ def serialize_blocks(blocks):
                 level = 1
             level = max(1, min(level, 6))
             parts.append("#" * level + " " + text)
+        elif btype in ("heading2", "heading3", "heading4"):
+            level = {"heading2": 2, "heading3": 3, "heading4": 4}[btype]
+            parts.append("#" * level + " " + text)
         elif btype == "blockquote":
             parts.append("\n".join("> " + line for line in text.split("\n")))
         elif btype == "unordered_list":

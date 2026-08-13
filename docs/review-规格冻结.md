@@ -3,7 +3,26 @@
 > 来源：`文序-个人自用完善与渠道化成稿检查-完整设计方案-v1.0.docx`（D-01~D-08 用户已确认，D-09~D-11 设计冻结）
 > 冻结日期：2026-08-13。实施以本文为准；改动需走决策记录。
 
-## 核心语义（不可违反）
+## 实施状态（2026-08-13 全部完成）
+
+| Phase | 内容 | 状态 | 验证 |
+|---|---|---|---|
+| 0 | 设计基线冻结 | ✅ | docs/review-规格冻结.md |
+| 1 | 规则内核（Rule schema 校验/危险输入拒绝/pack_loader/resolver 四层） | ✅ | test_review_models 14 + resolver 5 |
+| 2 | Session/Issue/面板（迁移 v6、repository/service/routes、NDJSON、定位） | ✅ | test_review_api 11 + E2E review 1 |
+| 3 | 渠道变体+双导出（stale gate/引用渲染/文件名安全/摘要） | ✅ | test_review_exporter 12 + API 2 + E2E 导出 |
+| 4 | AI 语义+证据（结构化 JSON 校验/锚点核对/待核实/聚合冲突/流式） | ✅ | test_review_ai 11 |
+| 5 | 内置规则包 8 个（渠道经验建议诚实标注，来源门禁） | ✅ | test_review_packs 11 |
+| 6 | 规则编辑/两阶段导入/恢复默认 | ✅ | test_review_import 7 |
+| 7 | 真实文章验收（1020 字观点长文全流程）+ heading2-4 层级修复 | ✅ | scripts/acceptance_*.py |
+
+**验收记录**：真实观点长文（16 blocks / 1020 字，含空标题与事实主张）→ 检查 session
+确定性 2 条（空标题/重复字）+ 证据 4 条（市场规模等主张标待核实）→ 通用版 Markdown
+导出（1068 字符，标题层级正确）+ 摘要 manifest（version/hash/状态）。
+AI 语义 0 条为模型输出不合规被 schema 丢弃（诚实降级，不伪造结果）。
+
+**已知边界（如实）**：渠道包为经验建议级（official 规则需用户核验官方文档后导入，
+来源门禁强制 url+verified_at）；AI 语义检查受模型输出质量影响（缺字段丢弃有 warning）。
 
 1. **主稿/变体分离**：通用与文章类型修复可进入主稿（走既有保存/撤销/版本）；渠道专属修复只进入渠道变体补丁层（不写 blocks_json）。通用版导出不得含渠道补丁。
 2. **逐项确认**：任何正文或变体修改必须逐项采用；没有"一键接受全部"。AI 未经确认写入正文 = 0。
