@@ -1697,6 +1697,56 @@ async function runCheck(target) {
 $('#tool-sr').addEventListener('click', () => { reportSignal('tool_click', { tool: 'search', focus: 'block' }); runSearch(anchorFromSel()); });
 $('#tool-ck').addEventListener('click', () => { reportSignal('tool_click', { tool: 'check', focus: 'block' }); runCheck(anchorFromSel()); });
 
+/* ========== 图片上传/插入（P1-⑦） ========== */
+function insertImageBlock(url, alt) {
+  const art = $('#article');
+  if (!art) return;
+  const el = document.createElement('img');
+  el.className = 'blk edit';
+  el.contentEditable = 'false';
+  el.dataset.bid = crypto.randomUUID();
+  el.dataset.type = 'image';
+  el.src = url;
+  el.alt = alt || '';
+  // 问题就近：有选区锚点时插在锚点块后，否则插到末尾
+  const anchor = anchorFromSel();
+  const last = art.querySelector('.blk.edit:last-of-type');
+  if (anchor && anchor.closest('#article')) anchor.after(el);
+  else if (last) last.after(el);
+  else art.appendChild(el);
+  markDirty(currentAid);
+  saveNow(currentAid, 'autosave');
+  toast_('图片已插入（保存中）');
+}
+
+async function uploadImage(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const resp = await fetch('/api/uploads/image', { method: 'POST', body: fd });
+  if (!resp.ok) {
+    const e = await resp.json().catch(() => ({}));
+    throw new Error(e.detail || ('HTTP ' + resp.status));
+  }
+  return resp.json();
+}
+
+$('#tool-img').addEventListener('click', () => {
+  if (!currentAid) { toast_('先打开草稿'); return; }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/gif,image/webp';
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    reportSignal('tool_click', { tool: 'image' });
+    try {
+      const r = await uploadImage(file);
+      insertImageBlock(r.url, file.name.replace(/\.[^.]+$/, '').slice(0, 80));
+    } catch (e) { toast_('图片上传失败：' + e.message); }
+  };
+  input.click();
+});
+
 /* 关闭/隐藏前 best-effort flush；可靠性由 IndexedDB 恢复副本 + 正常保存保证 */
 window.addEventListener('pagehide', () => {
   if (currentAid) {

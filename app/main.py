@@ -4,10 +4,11 @@ import json
 import os
 import secrets
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +19,20 @@ from app.domains import exports as export_service
 from app.llm import LLMClient, LLMError
 from app.review.routes import router as review_router
 from app.schemas import Block
+
+# 图片上传：本地存储目录（data/uploads，gitignore）；类型白名单 + 大小上限
+UPLOADS_DIR = os.environ.get(
+    "WENSU_UPLOADS_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads"),
+)
+UPLOAD_MAX_BYTES = 5 * 1024 * 1024  # 5MB
+_UPLOAD_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+os.makedirs(UPLOADS_DIR, exist_ok=True)  # 挂载点必须存在（StaticFiles 启动校验）
 
 # 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
 # 查找顺序：WENSU_WEB_DIR 环境变量 → 源码树 web/（开发）→ sys.prefix/web（wheel data-files 安装）
@@ -1198,6 +1213,33 @@ def api_export_article(aid: int, format: str = "md", appendix: int = 1, theme: s
 
 
 app.include_router(review_router)
+
+
+# ---------- 图片上传（P1-⑦）：本地存储 + uuid 文件名，供 image Block 使用 ----------
+
+@app.post("/api/uploads/image")
+async def api_upload_image(file: UploadFile = File(...)):
+    """上传图片：类型白名单（png/jpg/gif/webp）+ 5MB 上限 + uuid 文件名（无路径穿越面）。
+
+    返回 {"url": "/uploads/<uuid>.<ext>"}，前端插入 image Block。
+    """
+    ext = _UPLOAD_MIME_EXT.get((file.content_type or "").lower())
+    if ext is None:
+        raise HTTPException(400, f"不支持的图片类型：{file.content_type or '未知'}（仅 png/jpg/gif/webp）")
+    data = await file.read(UPLOAD_MAX_BYTES + 1)
+    if len(data) > UPLOAD_MAX_BYTES:
+        raise HTTPException(400, "图片超过 5MB 上限")
+    if not data:
+        raise HTTPException(400, "图片内容为空")
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    name = f"{uuid.uuid4().hex}{ext}"
+    dest = os.path.join(UPLOADS_DIR, name)
+    with open(dest, "wb") as handle:
+        handle.write(data)
+    return {"url": f"/uploads/{name}", "bytes": len(data)}
+
+
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 # 静态前端（必须最后挂载；基于文件位置，任意 CWD 可用）
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
