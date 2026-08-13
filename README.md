@@ -2,24 +2,28 @@
 
 作品是中心，人是作者，AI 是围绕作品工作的智能层。
 
-当前状态：实施计划 v0.2 全量完成（Phase 0-8，WEN-001 起至发布加固），本地可用 MVP——
-真存储、真模型、五条 AI 链路（Ask / 改写 / 洞察 / 搜索 / 核验）、证据引用、规则智能建议、
-作者记忆、多模型绑定、回收站/历史/导出、自动备份与安全收口。
+当前状态：实施计划 v0.2 全量完成 + Gate B（可发布闭环版）修复——真存储、真模型、
+五条 AI 链路（Ask / 改写 / 洞察 / 搜索 / 核验）、证据引用、规则智能建议、作者记忆、
+多模型绑定、回收站/历史/导出、自动备份与安全收口。
 
 ## 主要能力
 
-- **写作**：Block 式编辑（H1-H4/正文/引用层级保留）、自动保存状态机、中文 IME、
-  粘贴白名单、撤销栈、版本历史、回收站、Markdown 导出
+- **写作**：Block 式编辑（H1-H4/列表/代码/图片/分隔线完整往返，不降级 paragraph）、
+  自动保存状态机、中文 IME、粘贴白名单、撤销栈、版本历史、回收站、
+  统一导出（Markdown / 纯文本 / Word，含引用清单与来源附录）
+- **证据链**：来源 → 素材（显式使用关系，不靠共享来源推断）→ 正文主张 → 引用 →
+  核验（六态受控）→ 正文变化自动失效复查 → 安全删除/解除关系
+- **Revision 管道**：素材插入 / Ask 插入 / AI 改写 / 核验修订 / 冲突恢复 / 版本恢复
+  统一记录 before/after 快照，可从版本历史恢复或撤销单次修改
+- **继续写**：上次编辑位置（块 + 光标 + 滚动）、最近素材、待处理检查、待复查引用、
+  一句可解释的下一步；位置属本地写作状态，不进模型上下文
 - **AI 五链路**：Ask（偏好+历史上下文）/ 改写（段下候选，选中即改）/ 洞察（手动触发）/
   搜索（NDJSON 流式+缓存）/ 核验（证据型）
-- **成稿检查**：规则包四层 Profile（通用/类型/渠道/个人）→ 确定性检查（空标题/跳级/
-  危险链接/重复标点/超长句/孤儿引用）→ AI 语义（结构化输出校验+锚点核对）→ 证据
-  （事实主张待核实）→ 逐项采用（主稿走版本/渠道建补丁）→ 双版本 Markdown 导出+摘要
-- **规则管理**：内置 8 包；覆盖/恢复默认；两阶段导入（预览→确认，恶意包拒绝）
-- **写作智能**：信号上报 + 规则建议引擎（可解释、无模型可用）
-- **记忆与多模型**：作者偏好透明可删；Ask 历史；多模型按任务绑定
-- **安全**：本地绑定；Origin/Host/session token 三重守卫；DPAPI 加密 Key；
-  每日自动备份；诊断包不含正文/Key
+- **成稿检查**：规则包四层 Profile → 确定性检查 → AI 语义 → 证据 → 逐项采用 →
+  双版本 Markdown 导出+摘要
+- **安全**：本机绑定；Host 校验 + Origin 强制 + session token 三重守卫
+  （POST/PUT/PATCH/DELETE 一律要求允许的 Origin 与有效 session，缺失即 403；
+  静态页面与健康检查不受限）；DPAPI 加密 Key；每日自动备份；诊断包不含正文/Key
 
 ## 环境要求
 
@@ -50,20 +54,22 @@ wensu            # 或 python -m app.cli；任意工作目录可启动
 
 | 项 | 值 |
 |----|----|
-| 服务地址 | http://127.0.0.1:8766（仅本机，Host/Origin/token 三重防护） |
-| 数据库 | `data\workbench.db`（SQLite，WAL + FK，版本乐观锁） |
+| 服务地址 | http://127.0.0.1:8766（仅本机；Host/Origin/session 三重防护，写请求缺任一即 403） |
+| 数据库 | `data\workbench.db`（SQLite，WAL + FK，版本乐观锁；v8 迁移：Material 显式使用关系 + Revision 契约扩展 + 继续写位置） |
 | 备份 | `data\backups\workbench-YYYYMMDD.db`（每日首次启动自动） |
 | Key 存储 | DPAPI 加密 BLOB；改 base_url origin 自动清 Key |
 
 ## 测试
 
 ```bash
-# 后端（143 项）
+# 后端单元 + 集成（313 项，2026-08-13 Gate B 实测全绿）
 env -u PYTHONPATH .\.venv\Scripts\python.exe -m pytest -q
 # 前端单元（7 项，fake transport 不碰网络）
 cd web && npx vitest run
-# 浏览器 E2E（17 项，系统 Chrome + route mock）
+# 浏览器 E2E（23 项，系统 Chrome + route mock 快速回归）
 cd web && npx playwright test
+# 真实后端 E2E（12 项，Gate B E01~E12：真实 FastAPI + 临时 SQLite + 本地假 LLM）
+cd web && npx playwright test --config playwright.config.real.js
 ```
 
 （`env -u PYTHONPATH` 必须：bash 会话会注入 Hermes venv 路径，污染 3.12 解释器）
@@ -88,11 +94,14 @@ cd web && npx playwright test
 
 ```
 app/           后端（main / db / settings / llm / ai_service / copilot / safe_fetch / blocks / cli）
+app/domains/   领域服务（exports：统一导出装配与渲染）
+app/review/    成稿检查（路由/服务/确定性/证据/AI/导出/规则包 packs/*.json）
 web/           正式前端（index.html / style.css / js/ 模块化）
-tests/         后端测试（143 项）
-web/tests/     前端单元 + E2E（24 项）
+tests/         后端测试（313 项）
+web/tests/     前端单元（7）+ mock E2E（23）+ 真实后端 E2E（12，Gate B）
 docs/          文档
 data/          数据库与备份（gitignore）
+scripts/       E2E 服务启动器（fake_llm / e2e_app / launcher）
 ```
 
 ## 已知环境注意事项

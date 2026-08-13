@@ -44,12 +44,25 @@ def test_wrong_header_token_rejected():
 
 
 def test_no_token_local_request_allowed():
-    """无 token 的本地工具请求（curl/脚本）由 Origin 守卫兜底，仍可工作。"""
+    """P1-6 收紧：无 session 的写请求必须 403（curl/脚本需带 X-Wensu-Token 或先取 cookie）。
+
+    原断言 200 已随守卫强化（缺失 session 一律 403）更新。
+    显式传空 token 覆盖 conftest 自动补头。
+    """
     c = _client()
-    r = c.post("/api/projects", json={"name": "no-token-ok"})
+    r = c.post("/api/projects", json={"name": "no-token-ok"},
+               headers={"X-Wensu-Token": ""})
+    assert r.status_code == 403
+
+
+def test_header_token_allowed_for_scripts():
+    """本地脚本/curl：显式带 X-Wensu-Token 可写。"""
+    c = _client()
+    r = c.post("/api/projects", json={"name": "token-script-ok"},
+               headers={"X-Wensu-Token": main.SESSION_TOKEN})
     assert r.status_code == 200
     conn = main._conn()
-    conn.execute("DELETE FROM projects WHERE name = 'no-token-ok'")
+    conn.execute("DELETE FROM projects WHERE name = 'token-script-ok'")
     conn.commit()
     conn.close()
 

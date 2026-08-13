@@ -10,6 +10,15 @@
 | v3 | 证据数据层：sources / evidence_snapshots / materials / citations |
 | v4 | 回收站：articles.deleted_at / projects.deleted_at（软删除） |
 | v5 | Phase 7：article_asks（草稿隔离历史）/ author_prefs（作者记忆）/ model_profiles + task_bindings（多模型） |
+| v6 | Phase 8：软删除级联恢复（防孤儿） |
+| v7 | 素材标签/元数据（materials.tags / metadata_json）、Ask 元数据、引用核验元数据（6 态） |
+| v8 | Gate B：material_usages（素材↔草稿/引用显式关系，不再靠共享 source_id 推断）；article_revisions 契约扩展（before_blocks_json / scope / source_object_type / source_object_id / status）；articles.editor_state_json（继续写位置，本地写作状态） |
+
+## 迁移原则
+
+- 只追加版本，不修改已应用的旧迁移；幂等；失败版本不记录、整体回滚、不破坏已有正文
+- 旧数据兼容：无 material_usages 的旧素材显示"未使用"（不伪造关系）；
+  旧 Revision 读取得默认空 before 快照；旧非法核验状态原样保留（由 API 校验层暴露，不静默吞）
 
 ## 备份
 

@@ -7,6 +7,8 @@ cd D:\文序项目\ai-writing-system
 env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q
 ```
 
+**当前规模：313 项全部通过（2026-08-13 Gate B 修复后实测）**
+
 | 文件 | 覆盖 |
 |---|---|
 | test_db.py | 迁移幂等/回滚、乐观锁 409、原子保存、FK/WAL |
@@ -21,14 +23,29 @@ env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q
 | test_trash_history.py | 回收站级联、历史恢复、导出 |
 | test_phase7.py | Ask 隔离/checkpoint、prefs、profiles/bindings |
 | test_phase8.py | session token、诊断包、每日备份 |
+| test_gateb_p0.py | P0-1~P0-3：正文变化引用失效（API 级）、素材 PATCH、模型连接测试 |
+| test_gateb_p1.py | P1-1/P1-3/P1-6：Block 往返、核验状态 422、守卫（PATCH/Origin/session） |
+| test_gateb_p0_revision.py | P0-4 统一 Revision 管道 + 事务完整性（冲突/失败回滚） |
+| test_gateb_p0_usage.py | P0-6 素材显式使用关系/删除语义/旧数据兼容 |
+| test_gateb_export.py | P0-5 统一导出（md/txt/docx/引用附录/文件名安全/不改稿） |
+| test_gateb_position.py | P1-5 继续写位置保存/恢复/失效回退 |
+| test_gateb_migration.py | v1/v5/v7 升级链、重复迁移、失败回滚、旧数据兼容 |
+| test_gateb_backup.py | SQLite backup API 完整备份→恢复→数量与关系校验 |
 
 ## 前端（Vitest + Playwright，web/ 下）
 
 ```
 cd web
-npx vitest run          # fake transport 单元测试（不碰真实网络）
-npx playwright test     # E2E：系统 Chrome，route mock
+npx vitest run          # 单元测试（7 项，fake transport 不碰真实网络）
+npx playwright test     # mock E2E（23 项）：系统 Chrome，route mock 快速回归
+npx playwright test --config playwright.config.real.js  # 真实后端 E2E（12 项，Gate B E01~E12）
 ```
+
+**真实后端 E2E（Gate B 验收，全部通过）：**
+- 启动真实 FastAPI（127.0.0.1:8770）+ 独立临时 SQLite（WENSU_DB）+ 本地假 LLM（OpenAI 兼容 8899）
+- 浏览器调用真实 API；不调用真实模型、不访问公网、不触碰 data/workbench.db
+- 覆盖 E01~E12：素材/Ask 保存与插入、Revision、引用建立与自动失效、帮我查不覆盖正文、
+  删除影响与解除关系、AI 改写接受/拒绝、网络失败本地可用、重启数据完整、三格式导出、长文位置恢复
 
 | 文件 | 覆盖 |
 |---|---|
@@ -42,6 +59,7 @@ npx playwright test     # E2E：系统 Chrome，route mock
 | tests/e2e/undo.spec.js | Ctrl+Z 撤销、选区精确替换 |
 | tests/e2e/copilot.spec.js | 规则建议、限频关闭 |
 | tests/e2e/phase7.spec.js | 偏好/模型配置设置 |
+| tests/e2e-real/gateb.spec.js | Gate B E01~E12 真实后端验收 |
 
 ## 真实环境验证（不可用 mock 冒充）
 

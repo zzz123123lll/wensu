@@ -1,7 +1,7 @@
 // 保存状态机：每草稿独立状态，防串稿/丢稿；IndexedDB 恢复副本；409 双份。
-// 依赖：security.js 的 escapeHtml（renderBlocks 用）
+// 依赖：editor-blocks.js 的 collectBlockFromDom / blockHtml（块类型往返）
 
-import { escapeHtml } from './security.js';
+import { collectBlockFromDom, blockHtml } from './editor-blocks.js';
 
 export const $ = s => document.querySelector(s);
 
@@ -109,10 +109,10 @@ function scheduleSave(aid) {
   saveTimer = setTimeout(() => saveNow(aid), 1200);
 }
 
-export async function saveNow(aid, reason = 'autosave') {
+export async function saveNow(aid, reason = 'autosave', extra = {}) {
   const st = sstate(aid);
-  if (!st.dirty) return;
-  if (st.inFlight) { st.pendingAfterSave = true; return; } // 在途：标记，ACK 后发最新
+  if (!st.dirty) return { ok: true, status: st.status };
+  if (st.inFlight) { st.pendingAfterSave = true; return { ok: false, status: 'in-flight' }; } // 在途：标记，ACK 后发最新
   const snapshot = collectBlocks();
   st.dirty = false;
   st.inFlight = { aid, revision: st.editRevision, hash: st.snapshotHash };
@@ -133,7 +133,11 @@ export async function saveNow(aid, reason = 'autosave') {
     const resp = await fetch(`/api/articles/${aid}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: snapshot, base_version: st.baseVersion, change_reason: reason }),
+      body: JSON.stringify({
+        blocks: snapshot, base_version: st.baseVersion, change_reason: reason,
+        source_object_type: extra.source_object_type || '',
+        source_object_id: extra.source_object_id || '',
+      }),
     });
     if (resp.status === 409) {
       const d = await resp.json().catch(() => ({}));
@@ -141,30 +145,33 @@ export async function saveNow(aid, reason = 'autosave') {
       st.dirty = false;
       setSaveStatus(st, 'conflict');
       showConflict(aid, (d.detail && d.detail.current_version) || st.baseVersion);
-      return;
+      return { ok: false, status: 'conflict' };
     }
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const d = await resp.json();
     st.baseVersion = d.version;
     // 只有 ACK 对应 revision/hash 等于当前，才显示"已保存"
-    if (st.inFlight && st.inFlight.revision === st.editRevision && st.inFlight.hash === st.snapshotHash) {
+    const ackMatched = st.inFlight && st.inFlight.revision === st.editRevision && st.inFlight.hash === st.snapshotHash;
+    if (ackMatched) {
       st.ackedRevision = st.editRevision;
       setSaveStatus(st, 'saved');
       if (!recoveryOk) toast_('已保存，但本地恢复副本未建立');
+      clearRecovery(aid).catch(() => {}); // 确认无未保存编辑后才清恢复副本（审查：ACK 不匹配时保留）
     }
     st.inFlight = null;
-    clearRecovery(aid).catch(() => {});
     if (st.pendingAfterSave) {
       st.pendingAfterSave = false;
       st.dirty = true;
       scheduleSave(aid);
     }
+    return { ok: true, status: 'saved' };
   } catch (e) {
     st.inFlight = null;
     st.dirty = true;
     setSaveStatus(st, 'offline');
     toast_('保存失败，稍后自动重试：' + e.message);
     scheduleSave(aid); // 重试最新快照
+    return { ok: false, status: 'offline' };
   }
 }
 
@@ -184,6 +191,8 @@ export function showConflict(aid, serverVersion) {
         const st = sstate(aid);
         st.baseVersion = serverVersion;
         st.editRevision += 1;
+        // 409 分支已把 dirty 置 false；恢复本地后必须重新标记脏，否则 saveNow 提前 return 不 PUT
+        st.dirty = true;
         saveNow(aid);
         toast_('已恢复本地副本并重新保存');
       } else toast_('未找到本地副本');
@@ -193,12 +202,7 @@ export function showConflict(aid, serverVersion) {
 }
 
 export function collectBlocks() {
-  return Array.from(document.querySelectorAll('#article .blk.edit')).map(d => ({
-    id: d.dataset.bid, // 稳定 ID（Enter 时已生成 UUID；旧数据保留原 ID）
-    type: d.tagName === 'H2' ? 'heading2' : d.tagName === 'H3' ? 'heading3' : (d.tagName === 'BLOCKQUOTE' ? 'blockquote' : 'paragraph'),
-    text: d.textContent,
-    attrs: {},
-  }));
+  return Array.from(document.querySelectorAll('#article .blk.edit')).map(el => collectBlockFromDom(el));
 }
 
 /* ---------- 撤销栈（每草稿；AI 应用/版本恢复前入栈，Ctrl+Z 出栈） ---------- */
@@ -221,13 +225,15 @@ export function popUndo(aid) {
 }
 
 export function renderBlocks(blocks) {
-  $('#article').innerHTML = `<div class="art-title">${escapeHtml($('#doc-title').textContent)}</div>` +
-    blocks.map(b => {
-      if (b.type === 'heading' || b.type === 'heading2' || b.type === 'heading3') {
-        const tag = b.type === 'heading3' ? 'h3' : 'h2';
-        return `<${tag} class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</${tag}>`;
-      }
-      if (b.type === 'blockquote') return `<blockquote class="blk edit" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</blockquote>`;
-      return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${escapeHtml(b.id)}">${escapeHtml(b.text)}</div>`;
-    }).join('');
+  // 只替换正文块区：保留 art-title / art-meta（#save-status + 历史/成稿检查/导出按钮）
+  // 及其事件监听（审查发现：innerHTML 整体重建会丢按钮监听，撤销/冲突恢复后操作栏失效）
+  const art = $('#article');
+  art.querySelectorAll('.blk.edit').forEach(n => n.remove());
+  const frag = document.createDocumentFragment();
+  for (const b of blocks) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = blockHtml(b).trim();
+    frag.appendChild(tpl.content.firstChild);
+  }
+  art.appendChild(frag);
 }

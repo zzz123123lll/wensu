@@ -10,11 +10,15 @@
 ## 网络边界（本地桌面版）
 
 - 只绑定 `127.0.0.1`，不监听局域网
-- 三层防护（纵深）：
+- 三层防护（纵深），**覆盖全部写方法 POST/PUT/PATCH/DELETE**：
   1. **Host 白名单**：非 `127.0.0.1:8766` / `localhost:8766` → 403（防 DNS rebinding）
-  2. **Origin 白名单**：写请求带非本地 Origin → 403（防同机恶意网页 CSRF）
-  3. **随机 session token**：HttpOnly cookie + X-Wensu-Token 头；带错 token → 403
+  2. **Origin 强制**：写请求必须有 Origin 且在白名单，缺失或非本地 Origin → 403
+     （防同机恶意网页 CSRF / 匿名写；浏览器同源自动携带）
+  3. **session token 强制**：写请求必须有有效 session（HttpOnly cookie 或 X-Wensu-Token 头），
+     缺失或错误 → 403；curl/脚本必须显式带 `X-Wensu-Token`
+- 静态页面、健康检查、GET 读请求不受限（本地可用性保留）
 - CORS 白名单明确列出，禁止 `*`
+- 测试/多端口部署通过 `WENSU_EXTRA_HOSTS` / `WENSU_EXTRA_ORIGINS` 环境变量扩展（默认行为不变）
 
 ## 抓取（SSRF）
 

@@ -38,7 +38,7 @@ def main():
     req2 = urllib.request.Request(B + f'/api/reviews/{rid}/stream')
     t0 = time.time()
     raw = urllib.request.urlopen(req2, timeout=180).read().decode()
-    lines = [json.loads(l) for l in raw.strip().split('\n') if l.strip()]
+    lines = [json.loads(ln) for ln in raw.strip().split('\n') if ln.strip()]
     stages = [(e.get('stage'), e.get('status'), e.get('count')) for e in lines if e.get('type') == 'stage']
     issues = [e['issue'] for e in lines if e.get('type') == 'issue']
     warns = [e.get('message') for e in lines if e.get('type') == 'warning']

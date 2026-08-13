@@ -12,10 +12,13 @@ import hashlib
 import re
 import uuid
 
-# 合法块类型（稳定顺序，供前端/文档使用）
+# 合法块类型（稳定顺序，供前端/文档使用；与 app/schemas.py BLOCK_TYPES 保持一致）
 BLOCK_TYPES = (
     "paragraph",
-    "heading",
+    "heading",      # H1
+    "heading2",     # H2
+    "heading3",     # H3
+    "heading4",     # H4
     "blockquote",
     "unordered_list",
     "ordered_list",

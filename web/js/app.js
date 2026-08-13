@@ -3,6 +3,7 @@
 
 import { api } from './api.js';
 import { $, toast_, sstate, cancelPendingSave, markDirty, saveNow, collectBlocks, pushUndo, popUndo, renderBlocks } from './state.js';
+import { blockHtml } from './editor-blocks.js';
 import { escapeHtml, safeUrl } from './security.js';
 
 // 供 review 等动态加载模块引用（ES module 顶层声明是模块私有，须显式导出）
@@ -66,7 +67,7 @@ async function loadArticles(pid) {
   if (cnt) cnt.textContent = arts.length + ' 篇';
   if (!box) return;
   box.innerHTML = arts.map(a => `
-    <div class="doc sub ${currentAid === a.id ? 'active' : ''}" data-aid="${a.id}">
+    <div class="doc sub ${currentAid === a.id ? 'active' : ''}" data-aid="${a.id}" data-pid="${pid}">
       <span class="dot"></span><span class="name">${escapeHtml(a.title)}</span>
       <span class="del" data-del="${a.id}" title="移入回收站" aria-label="删除草稿">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M6 4V2.5h4V4M4 4l.7 9h6.6l.7-9M6.5 7v3.5M9.5 7v3.5"/></svg>
@@ -140,10 +141,16 @@ function openArticle(aid) {
     const br = $('#btn-review');
     if (br) br.addEventListener('click', () => { import('/js/review/panel.js').then(m => m.runReview(aid)).catch(e => toast_('检查模块加载失败：' + e.message)); });
     const be = $('#btn-export');
-    if (be) be.addEventListener('click', () => { location.href = `/api/articles/${aid}/export`; });
+    if (be) be.addEventListener('click', () => {
+      // 统一导出（P0-5）：Markdown / 纯文本 / Word，均含引用清单与来源附录
+      const fmt = prompt('导出格式：\n1 = Markdown\n2 = 纯文本\n3 = Word (docx)\n其他 = 取消', '1');
+      if (fmt === '1') location.href = `/api/articles/${aid}/export?format=md`;
+      else if (fmt === '2') location.href = `/api/articles/${aid}/export?format=txt`;
+      else if (fmt === '3') location.href = `/api/articles/${aid}/export?format=docx`;
+    });
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
-    $('#doc-scroll').scrollTop = 0;
+    restoreEditorPosition(aid); // P1-5：恢复上次位置（不强制 scrollTop=0）
     showInsightIdle(); // 默认不自动调用模型（WEN-009 安全默认）
     resetWriteObserver(); // 写作在场观察随草稿重置
     reportSignal('draft_open', { blocks_count: a.blocks.length }); // Phase 6 信号
@@ -160,6 +167,7 @@ async function showContinueCard() {
     const parts = [];
     if (r.last_edited) parts.push('上次编辑 ' + String(r.last_edited).slice(5, 16).replace('T', ' '));
     if (r.pending_review > 0) parts.push(`待处理检查 ${r.pending_review} 项`);
+    if (r.needs_recheck > 0) parts.push(`待复查引用 ${r.needs_recheck} 处`);
     if (!r.recent_materials.length) parts.push('还没有素材');
     const matsHtml = (r.recent_materials || []).map(m =>
       `<button class="mini2" data-mid="${m.id}" style="margin:2px">${escapeHtml((m.title || '').slice(0, 14))}</button>`).join('');
@@ -167,7 +175,7 @@ async function showContinueCard() {
     card.className = 'insight continue-card';
     card.innerHTML = `
       <div class="ins-head"><span class="ins-t">继续写</span></div>
-      <div class="ins-row"><span class="v">${escapeHtml(parts.join(' · ') || '新草稿')}</span></div>
+      <div class="ins-row"><span class="v">${escapeHtml(r.next_step || parts.join(' · ') || '新草稿')}</span></div>
       ${matsHtml ? `<div class="res-acts">${matsHtml}</div>` : ''}`;
     $('#cardflow').prepend(card);
     card.querySelectorAll('[data-mid]').forEach(b => b.onclick = () => {
@@ -177,15 +185,61 @@ async function showContinueCard() {
   } catch { /* 继续写卡失败不打扰 */ }
 }
 
-function blockHtml(b) {
-  if (b.type === 'heading') {
-    return `<h2 class="blk edit" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</h2>`;
-  }
-  if (b.type === 'blockquote') {
-    return `<blockquote class="blk edit" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</blockquote>`;
-  }
-  return `<div class="blk edit ${b.text ? '' : 'empty'}" contenteditable="true" data-bid="${b.id}">${escapeHtml(b.text)}</div>`;
+/* P1-5：恢复上次写作位置（光标 + 滚动）。位置失效 → 回退最近仍存在的 Block。 */
+async function restoreEditorPosition(aid) {
+  if (!aid) return;
+  try {
+    const r = await api(`/api/articles/${aid}/continue`);
+    const pos = r.position || {};
+    const blocks = Array.from(document.querySelectorAll('#article .blk.edit'));
+    if (!blocks.length) return;
+    let target = blocks.find(b => b.dataset.bid === pos.block_id);
+    if (!target) target = blocks[blocks.length - 1]; // 失效回退最近块
+    const scroller = $('#doc-scroll');
+    if (scroller && typeof pos.scroll_top === 'number') scroller.scrollTop = pos.scroll_top;
+    if (target && target.isContentEditable) {
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        const offset = Math.min(typeof pos.offset === 'number' ? pos.offset : 0, (target.textContent || '').length);
+        range.setStart(target.firstChild || target, offset);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        target.focus({ preventScroll: true });
+      } catch { /* 光标恢复失败不影响打开 */ }
+    }
+  } catch { /* 位置恢复失败不打扰 */ }
 }
+
+/* P1-5：保存写作位置（节流；位置不改变正文） */
+let posTimer = null;
+function scheduleSavePosition(aid) {
+  clearTimeout(posTimer);
+  posTimer = setTimeout(() => savePositionNow(aid), 1500);
+}
+function savePositionNow(aid) {
+  if (!aid) return;
+  const block = document.querySelector('#article .blk.edit:focus, #article .blk.edit');
+  if (!block) return;
+  let offset = 0;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && block.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0);
+    const pre = range.cloneRange();
+    pre.selectNodeContents(block);
+    pre.setEnd(range.startContainer, range.startOffset);
+    offset = pre.toString().length;
+  }
+  const scrollTop = $('#doc-scroll') ? $('#doc-scroll').scrollTop : 0;
+  fetch(`/api/articles/${aid}/position`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ block_id: block.dataset.bid || '', offset, scroll_top: scrollTop }),
+  }).catch(() => {});
+}
+
+// blockHtml 由 ./editor-blocks.js 提供（P1-1：H1~H4/列表/代码/图片/分隔线完整往返，不降级）
 
 /* ---------- 事件委托（Enter 新建块后输入仍触发保存） ---------- */
 let composing = false; // 中文 IME 组合中
@@ -238,6 +292,7 @@ function bindEditor() {
       block.classList.toggle('empty', block.textContent === '');
       markDirty(currentAid);
       onBlockEdited(block); // 写作在场观察（停顿/反复删改 → 低打扰提示）
+      scheduleSavePosition(currentAid); // P1-5：节流保存写作位置
     }
   });
   // 块标记入口：hover 显示 ⋯，点击弹问题菜单（Phase 6 显式信号）
@@ -349,7 +404,6 @@ async function loadProfiles() {
 }
 
 /* 设置弹窗打开时加载偏好与模型配置 */
-const _origOpen = $('#btn-settings').onclick;
 $('#btn-settings').addEventListener('click', () => { loadPrefs(); loadProfiles(); });
 import('/js/review/rules.js').then(m => {
   m.loadRulesSection();
@@ -512,16 +566,24 @@ async function editMaterialTags(mid, item) {
 async function deleteMaterial(mid) {
   try {
     const usage = await api(`/api/materials/${mid}/usage`);
-    if (usage.citations && usage.citations.length) {
-      const names = usage.citations.slice(0, 3).map(c => c.article_title || '草稿').join('、');
-      const unlink = confirm(`这个素材被 ${usage.citations.length} 处引用（${names}…）。\n只解除关系（正文引用保留）？`);
-      if (unlink) {
-        await api(`/api/materials/${mid}?unlink_only=1`, { method: 'DELETE' });
-        toast_('已解除关系，正文不受影响');
-      }
+    if (usage.material === null) { toast_('素材不存在'); loadMaterials(); return; }
+    const usages = usage.usages || [];
+    if (usages.length) {
+      // 真实影响（P0-6）：展示被哪些草稿使用，解除/删除/取消三选一
+      const names = usages.slice(0, 3).map(u => u.article_title || '草稿').join('、');
+      const act = prompt(`这个素材正被 ${usages.length} 处使用（${names}…）。\n输入 1 = 只解除关系（素材和正文引用保留）\n输入 2 = 删除素材（解除关系，正文和引用保留）\n其他 = 取消`, '1');
+      if (act === '1') {
+        const r = await api(`/api/materials/${mid}?unlink_only=1`, { method: 'DELETE' });
+        toast_(r.unlinked ? '已解除关系，素材/正文/引用均保留' : '无使用关系可解除');
+        loadMaterials();
+      } else if (act === '2') {
+        await api(`/api/materials/${mid}?force=1`, { method: 'DELETE' });
+        toast_('素材已删除，正文与引用保留');
+        loadMaterials();
+      } // 取消：零变化，不发请求
       return;
     }
-    if (!confirm('删除这个素材？')) return;
+    if (!confirm('删除这个素材？')) return; // 取消：零变化
     await api(`/api/materials/${mid}`, { method: 'DELETE' });
     toast_('已删除');
     loadMaterials();
@@ -549,8 +611,16 @@ async function insertMaterial(mid) {
     }
     block.dispatchEvent(new Event('input', { bubbles: true }));
     markDirty(currentAid);
-    saveNow(currentAid, 'material_insert');
-    toast_('已插入正文（可 Ctrl+Z 撤销）');
+    // 服务端确认成功后才显示"已插入"；失败时正文不显示为已持久化
+    const res = await saveNow(currentAid, 'material_insert',
+      { source_object_type: 'material', source_object_id: String(mid) });
+    if (res && res.ok) {
+      toast_('已插入正文（历史里可撤销）');
+    } else if (res && res.status === 'conflict') {
+      toast_('插入遇到版本冲突，请选择保留本地或服务器版');
+    } else {
+      toast_('插入内容尚未保存成功（已保留本地副本，将自动重试）');
+    }
   } catch (e) { toast_('插入失败：' + e.message); }
 }
 
@@ -720,9 +790,17 @@ async function insertAskToBody(r, promptText) {
   }
   block.dispatchEvent(new Event('input', { bubbles: true }));
   markDirty(currentAid);
-  saveNow(currentAid, 'ask_insert');
+  // 服务端确认成功后才显示"已插入"（P0-4：不得在保存完成前谎报成功）
+  const res = await saveNow(currentAid, 'ask_insert',
+    { source_object_type: 'ask', source_object_id: r.ask_id ? String(r.ask_id) : '' });
   if (r.ask_id) api(`/api/asks/${r.ask_id}/usage`, { method: 'POST', body: JSON.stringify({ usage: 'inserted_to_body' }) }).catch(() => {});
-  toast_('已插入正文（可 Ctrl+Z 撤销）');
+  if (res && res.ok) {
+    toast_('已插入正文（历史里可撤销）');
+  } else if (res && res.status === 'conflict') {
+    toast_('插入遇到版本冲突，请选择保留本地或服务器版');
+  } else {
+    toast_('插入内容尚未保存成功（已保留本地副本，将自动重试）');
+  }
 }
 
 /* 方案 B：Ask 历史时间轴（按草稿） */
@@ -737,12 +815,47 @@ async function showAskHistory() {
       return;
     }
     card.innerHTML = '<div class="ins-head"><span class="ins-t">问答历史</span></div>' +
-      history.map(h => `
-        <div class="ask-hist">
+      history.map((h, i) => `
+        <div class="ask-hist" data-ask-id="${h.id}">
           <div class="ask-h-q">${escapeHtml(h.prompt.slice(0, 60))}</div>
           <div class="ask-h-a">${escapeHtml(h.response.slice(0, 120))}${h.response.length > 120 ? '…' : ''}</div>
           <div class="ask-h-meta">${escapeHtml((h.created_at || '').slice(0, 16).replace('T', ' '))} · ${escapeHtml(h.model || '')}${h.metadata && h.metadata.usage ? ' · 已' + (h.metadata.usage === 'saved_as_material' ? '存为素材' : '插入正文') : ''}</div>
+          <div class="res-acts">
+            <button class="mini2" data-x="reask">重新提问</button>
+            <button class="mini2" data-x="copy">复制</button>
+            <button class="mini2" data-x="save">存素材</button>
+            <button class="mini2" data-x="insert">插入正文</button>
+            <button class="mini2" data-x="del">删除</button>
+          </div>
         </div>`).join('');
+    // P1-4：Ask 历史再利用——重新提问/复制/保存为素材/插入正文/删除
+    card.querySelectorAll('[data-x="reask"]').forEach((b, i) => b.onclick = () => {
+      const h = history[i];
+      $('#ask-input').value = h.prompt;
+      sendAsk();
+    });
+    card.querySelectorAll('[data-x="copy"]').forEach((b, i) => b.onclick = async () => {
+      const h = history[i];
+      try { await navigator.clipboard.writeText(h.response); toast_('已复制'); } catch { toast_('复制失败'); }
+    });
+    card.querySelectorAll('[data-x="save"]').forEach((b, i) => b.onclick = () => {
+      const h = history[i];
+      saveAskAsMaterial({ reply: h.response, ask_id: h.id }, h.prompt);
+    });
+    card.querySelectorAll('[data-x="insert"]').forEach((b, i) => b.onclick = () => {
+      const h = history[i];
+      insertAskToBody({ reply: h.response, ask_id: h.id }, h.prompt);
+    });
+    card.querySelectorAll('[data-x="del"]').forEach((b, i) => b.onclick = async () => {
+      const h = history[i];
+      if (!confirm('删除这条问答记录？此操作不可恢复。')) return; // 取消：零变化
+      try {
+        await api(`/api/asks/${h.id}`, { method: 'DELETE' });
+        toast_('已删除');
+        card.remove();
+        showAskHistory();
+      } catch (e) { toast_('删除失败：' + e.message); }
+    });
   } catch (e) {
     card.innerHTML = '<div class="ins-head"><span class="ins-t">问答历史</span></div><div class="ins-row"><span class="v">加载失败：' + escapeHtml(e.message) + '</span></div>';
   }
@@ -999,22 +1112,33 @@ async function showHistory() {
     if (!revs.length) { toast_('还没有历史版本（AI 改写/核验采纳时自动记录）'); return; }
     const card = document.createElement('div');
     card.className = 'ai-card';
-    const reasonLabel = v => ({ ai_rewrite: 'AI 改写', ai_check: '核验修订', restore: '版本恢复', autosave: '自动保存' }[v] || v);
+    const reasonLabel = v => ({
+      ai_rewrite: 'AI 改写', ai_check: '核验修订', conflict_recovery: '冲突恢复',
+      material_insert: '素材插入', ask_insert: 'Ask 插入', revision_restore: '版本恢复',
+      autosave: '自动保存', restore: '版本恢复',
+    }[v] || v);
+    const canUndo = v => ['material_insert', 'ask_insert', 'ai_rewrite', 'ai_check', 'conflict_recovery'].includes(v.reason)
+      && Array.isArray(v.before_blocks) && v.before_blocks.length > 0; // 旧数据无 before 快照不显示撤销（防清空）
     card.innerHTML = '<div class="ai-head">版本历史 <button class="mini2" id="hist-close" style="float:right">关闭</button></div>'
       + revs.map(v => `<div class="res">
           <div class="t">v${v.version} · ${reasonLabel(v.reason)}</div>
           <div class="sn">${escapeHtml(String(v.created_at).replace('T', ' ').slice(0, 16))}</div>
-          <div class="res-acts"><button class="mini2" data-x="restore" data-v="${v.version}">恢复此版本</button></div>
+          <div class="res-acts">
+            <button class="mini2" data-x="restore" data-v="${v.version}" data-point="after">恢复此版本</button>
+            ${canUndo(v) ? `<button class="mini2" data-x="restore" data-v="${v.version}" data-point="before">撤销这次${reasonLabel(v.reason)}</button>` : ''}
+          </div>
         </div>`).join('');
     $('#cardflow').prepend(card);
     $('#hist-close').onclick = () => card.remove();
     card.querySelectorAll('[data-x="restore"]').forEach(b => b.onclick = async () => {
-      if (!confirm(`恢复到 v${b.dataset.v}？（当前内容会保留为历史）`)) return;
+      const point = b.dataset.point || 'after';
+      const label = point === 'before' ? '撤销这次修改' : `恢复到 v${b.dataset.v}`;
+      if (!confirm(`${label}？（当前内容会保留为历史）`)) return;
       pushUndo(currentAid); // 可撤销点（WEN-023）
-      await api(`/api/articles/${currentAid}/revisions/${b.dataset.v}/restore`, { method: 'POST' });
+      await api(`/api/articles/${currentAid}/revisions/${b.dataset.v}/restore?point=${point}`, { method: 'POST' });
       card.remove();
       openArticle(currentAid);
-      toast_('已恢复到 v' + b.dataset.v);
+      toast_(label + '完成');
     });
   } catch (e) { toast_('历史加载失败：' + e.message); }
 }

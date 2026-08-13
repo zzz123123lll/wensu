@@ -8,7 +8,6 @@
 import json
 
 from app.llm import LLMError
-from app.review import ai_checker
 
 
 _SYSTEM = (

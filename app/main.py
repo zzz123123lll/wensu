@@ -1,29 +1,53 @@
 """文序 · 后端 API（第一阶段：项目/草稿/正文块 CRUD）。"""
 
+import json
 import os
+import secrets
+import urllib.parse
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app import ai_service, blocks, copilot, db, safe_fetch, settings
-from app.llm import LLMError
+from app import ai_service, copilot, db, safe_fetch, settings
+from app.domains import exports as export_service
+from app.llm import LLMClient, LLMError
 from app.review.routes import router as review_router
 from app.schemas import Block
 
 # 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+# 查找顺序：WENSU_WEB_DIR 环境变量 → 源码树 web/（开发）→ sys.prefix/web（wheel data-files 安装）
+def _find_web_dir() -> str:
+    env = os.environ.get("WENSU_WEB_DIR")
+    if env:
+        return env
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+    if os.path.isdir(src):
+        return src
+    import sys
 
-import secrets
-from datetime import datetime, timezone
+    installed = os.path.join(sys.prefix, "web")
+    if os.path.isdir(installed):
+        return installed
+    return src
+
+
+WEB_DIR = _find_web_dir()
 
 app = FastAPI(title="文序", version="0.2.0")
 
 # 本机绑定服务：只允许本地源（防恶意网页跨源调用本机 API）
-ALLOWED_ORIGINS = {"http://localhost:8766", "http://127.0.0.1:8766"}
-ALLOWED_HOSTS = {"127.0.0.1:8766", "localhost:8766"}
+# WENSU_EXTRA_HOSTS/ORIGINS：测试/多端口部署扩展（默认安全行为不变）
+ALLOWED_ORIGINS = {"http://localhost:8766", "http://127.0.0.1:8766"} | {
+    o for o in os.environ.get("WENSU_EXTRA_ORIGINS", "").split(",") if o
+}
+ALLOWED_HOSTS = {"127.0.0.1:8766", "localhost:8766"} | {
+    h for h in os.environ.get("WENSU_EXTRA_HOSTS", "").split(",") if h
+}
 
 # Phase 8：随机本地 session token（HttpOnly cookie，纵深防御；Origin 校验为主防线）
 SESSION_TOKEN = secrets.token_urlsafe(32)
@@ -38,19 +62,21 @@ async def security_guard(request, call_next):
     if host not in ALLOWED_HOSTS:
         _err_count += 1
         return JSONResponse({"detail": "invalid host"}, status_code=403)
-    # 写请求 + AI API：Origin 校验（防恶意网页跨源调用本机服务）
-    if request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/"):
+    # 所有状态改变方法（含 PATCH）+ AI API：Origin + session 双校验
+    # （本地单用户应用；浏览器同源写请求必须带允许的 Origin 与有效 session；
+    #  防恶意网页跨源调用本机服务 / 同机非授权进程写入）
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path.startswith("/api/"):
         origin = request.headers.get("origin")
-        if origin and origin not in ALLOWED_ORIGINS:
+        if not origin or origin not in ALLOWED_ORIGINS:
             _err_count += 1
             return JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
-        # session token 纵深防御：带了 token 就必须匹配（HttpOnly cookie 无法被恶意网页伪造）
+        # session token：HttpOnly cookie 无法被恶意网页伪造；curl/脚本必须带 X-Wensu-Token
         cookie_token = request.cookies.get("wensu_session")
         header_token = request.headers.get("x-wensu-token")
-        if cookie_token is not None and cookie_token != SESSION_TOKEN:
-            _err_count += 1
-            return JSONResponse({"detail": "invalid session"}, status_code=403)
-        if header_token is not None and header_token != SESSION_TOKEN:
+        if not (
+            (cookie_token is not None and cookie_token == SESSION_TOKEN)
+            or (header_token is not None and header_token == SESSION_TOKEN)
+        ):
             _err_count += 1
             return JSONResponse({"detail": "invalid session"}, status_code=403)
     try:
@@ -114,7 +140,12 @@ class ArticleUpdate(BaseModel):
     title: str | None = None
     blocks: list[Block] | None = None  # typed Block：非法输入 422
     base_version: int  # 乐观锁：客户端已知的服务端版本
-    change_reason: str = "autosave"
+    change_reason: Literal["autosave", "ai_rewrite", "ai_check", "conflict_recovery",
+                           "material_insert", "ask_insert", "revision_restore"] = "autosave"
+    # 统一 Revision 契约（P0-4）：来源对象 + 作用范围随保存写入
+    source_object_type: str = ""  # material | ask | ai_rewrite | ...
+    source_object_id: str = ""
+    scope: str = "blocks"
 
 
 class SettingsIn(BaseModel):
@@ -161,19 +192,54 @@ class SourceIn(BaseModel):
     provider: str = ""
 
 
+# 标签上限：数量与单个长度（P0-2 统一边界校验）
+MAX_MATERIAL_TAGS = 20
+MAX_TAG_LEN = 30
+
+
 class MaterialIn(BaseModel):
     title: str
     content: str = ""
     source_id: int | None = None
     tags: list[str] = []
 
+    @field_validator("title")
+    @classmethod
+    def _check_title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("素材标题不能为空")
+        if len(v) > 200:
+            raise ValueError("素材标题最长 200 字符")
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def _clean_tags(cls, v: list[str]) -> list[str]:
+        """去空字符串、去首尾空格、去重复；上限校验。"""
+        cleaned: list[str] = []
+        for t in v or []:
+            t = (t or "").strip()
+            if not t or t in cleaned:
+                continue
+            if len(t) > MAX_TAG_LEN:
+                raise ValueError(f"单个标签最长 {MAX_TAG_LEN} 字符")
+            cleaned.append(t)
+        if len(cleaned) > MAX_MATERIAL_TAGS:
+            raise ValueError(f"标签最多 {MAX_MATERIAL_TAGS} 个")
+        return cleaned
+
 
 class AskUsageIn(BaseModel):
     usage: str  # saved_as_material | inserted_to_body
 
 
+# 与 db.VERIF_* 常量一致的受控状态集合（P1-3：非法状态 422）
+VERIF_STATUSES = ("pending", "supported", "insufficient", "conflicting", "source_dead", "needs_recheck")
+
+
 class VerificationIn(BaseModel):
-    status: str  # pending|supported|insufficient|conflicting|source_dead|needs_recheck
+    status: Literal["pending", "supported", "insufficient", "conflicting", "source_dead", "needs_recheck"]
     note: str = ""
 
 
@@ -242,24 +308,6 @@ def _conn():
     return conn
 
 
-def _changed_block_ids(conn, aid: int, new_blocks: list[dict]) -> set[str]:
-    """新旧正文块 diff：返回文本实质变化的 block_id（方案 C 核验失效依据）。"""
-    old = conn.execute("SELECT blocks_json FROM articles WHERE id = ?", (aid,)).fetchone()
-    if old is None:
-        return set()
-    try:
-        old_blocks = json.loads(old["blocks_json"])
-    except Exception:
-        return set()
-    old_map = {b.get("id"): b.get("text", "") for b in old_blocks if b.get("id")}
-    new_map = {b.get("id"): b.get("text", "") for b in new_blocks if b.get("id")}
-    changed = set()
-    for bid, text in new_map.items():
-        if old_map.get(bid) != text:
-            changed.add(bid)
-    return changed
-
-
 @app.get("/api/projects")
 def api_list_projects():
     conn = _conn()
@@ -324,11 +372,38 @@ def api_get_article(aid: int):
 def api_save_article(aid: int, body: ArticleUpdate):
     conn = _conn()
     try:
+        # P0-1：覆盖正文前先取旧 Block 快照（保存后再读就永远是"新正文"，diff 恒空）
+        art = db.get_article(conn, aid)
+        if art is None:
+            raise HTTPException(404, "草稿不存在")
+        old_blocks = art["blocks"]
         plain_blocks = [b.model_dump() for b in body.blocks] if body.blocks is not None else None
+        # 素材插入：计算变化块并同事务记录显式使用关系（P0-6）
+        # 目标块优先取"新增的块"（插入语义精确）；无新增块时取第一个实质变化块；
+        # 无任何实质变化（如重复插入相同文本）→ 不记录，避免空关联
+        material_usage = None
+        if plain_blocks is not None and body.change_reason == "material_insert" \
+                and body.source_object_type == "material" and body.source_object_id:
+            try:
+                mid_int = int(body.source_object_id)
+            except ValueError:
+                mid_int = 0
+            if mid_int:
+                changed_ids, _ = db.diff_block_texts(old_blocks, plain_blocks)
+                old_ids = {b["id"] for b in old_blocks}
+                added = {b["id"] for b in plain_blocks} - old_ids
+                target = next(iter(added & changed_ids), None) or next(iter(changed_ids), None)
+                if target is not None:
+                    material_usage = (mid_int, target)
         try:
+            # 保存、版本递增、Revision 创建、Citation 失效/孤立在 db.save_article 同一事务内
             version = db.save_article(
                 conn, aid, body.title, plain_blocks,
                 base_version=body.base_version, reason=body.change_reason,
+                before_blocks=old_blocks if body.blocks is not None else None,
+                source_object_type=body.source_object_type or "",
+                source_object_id=body.source_object_id or "",
+                material_usage=material_usage,
             )
         except db.NotFoundError:
             raise HTTPException(404, "草稿不存在")
@@ -340,11 +415,6 @@ def api_save_article(aid: int, body: ArticleUpdate):
                 "blocks": art["blocks"] if art else [],
                 "blocks_hash": art["blocks_hash"] if art else "",
             })
-        # 方案 C：正文块实质变化 → 相关引用核验自动失效（needs_recheck）
-        if body.blocks is not None:
-            changed = _changed_block_ids(conn, aid, [b.model_dump() for b in body.blocks])
-            if changed:
-                db.invalidate_citations_on_edit(conn, aid, changed)
         return {
             "ok": True,
             "article_id": aid,
@@ -528,7 +598,10 @@ def api_create_material(pid: int, body: MaterialIn):
         raise HTTPException(400, "素材标题不能为空")
     conn = _conn()
     try:
-        mid = db.create_material(conn, pid, title, body.content, body.source_id, body.tags)
+        try:
+            mid = db.create_material(conn, pid, title, body.content, body.source_id, body.tags)
+        except db.NotFoundError as e:
+            raise HTTPException(404, str(e))
         return {"id": mid}
     finally:
         conn.close()
@@ -548,16 +621,21 @@ def api_get_material(mid: int):
 
 @app.patch("/api/materials/{mid}")
 def api_update_material(mid: int, body: MaterialIn):
-    """编辑标签/标题/内容（方案 A：素材详情可编辑标签）。"""
+    """编辑标签/标题/内容（方案 A：素材详情可编辑标签）。
+
+    P0-2：先校验存在（404），tags 已在 pydantic 层清洗去重并限长（422），
+    非法输入一律 4xx，不返回 500。
+    """
     conn = _conn()
     try:
-        cur = conn.execute(
+        m = db.get_material(conn, mid)
+        if m is None:
+            raise HTTPException(404, "素材不存在")
+        conn.execute(
             "UPDATE materials SET title = ?, content = ?, tags = ? WHERE id = ?",
-            (body.title.strip()[:200], body.content, json.dumps(body.tags or [], ensure_ascii=False), mid),
+            (body.title, body.content, json.dumps(body.tags, ensure_ascii=False), mid),
         )
         conn.commit()
-        if cur.rowcount == 0:
-            raise HTTPException(404, "素材不存在")
         return {"ok": True}
     finally:
         conn.close()
@@ -574,18 +652,36 @@ def api_material_usage(mid: int):
 
 
 @app.delete("/api/materials/{mid}")
-def api_delete_material(mid: int, unlink_only: int = 0):
-    """删除素材；被引用时默认拒绝，unlink_only=1 仅解除关系（正文保留）。"""
+def api_delete_material(mid: int, unlink_only: int = 0, force: int = 0):
+    """删除素材（P0-6 明确语义）。
+
+    - unlink_only=1：只解除全部使用关系（Material/Citation/正文保留）→ unlinked=true
+    - 被使用且未 force：409 + 真实影响（usages），不静默删除
+    - force=1：删除 Material + 其使用关系（正文与 Citation 保留）
+    - 未使用：直接删除
+    """
     conn = _conn()
     try:
         usage = db.material_usage(conn, mid)
         if usage["material"] is None:
             raise HTTPException(404, "素材不存在")
-        if usage["citations"] and not unlink_only:
-            raise HTTPException(409, f"该素材被 {len(usage['citations'])} 处引用，需先解除关系或确认影响范围")
+        n_usage = len(usage["usages"])
+        if unlink_only:
+            removed = db.unlink_material(conn, mid)
+            return {"ok": True, "unlinked": True, "removed_usages": removed,
+                    "kept_material": True, "kept_citations": True, "kept_blocks": True}
+        if n_usage and not force:
+            raise HTTPException(409, {
+                "code": "material_in_use",
+                "message": f"该素材被 {n_usage} 处使用，需确认影响范围",
+                "usages": usage["usages"],
+                "articles": usage["articles"],
+            })
+        # force 或未使用：删除素材（material_usages 由 FK 级联删除；正文/Citation 保留）
         conn.execute("DELETE FROM materials WHERE id = ?", (mid,))
         conn.commit()
-        return {"ok": True, "unlinked": bool(unlink_only and usage["citations"])}
+        return {"ok": True, "deleted": True, "removed_usages": n_usage,
+                "kept_citations": True, "kept_blocks": True}
     finally:
         conn.close()
 
@@ -705,13 +801,21 @@ def api_list_revisions(aid: int):
 
 
 @app.post("/api/articles/{aid}/revisions/{version}/restore")
-def api_restore_revision(aid: int, version: int):
+def api_restore_revision(aid: int, version: int, point: str = "after"):
     conn = _conn()
     try:
         try:
-            new_version = db.restore_revision(conn, aid, version)
+            new_version = db.restore_revision(conn, aid, version, point)
         except db.NotFoundError as e:
             raise HTTPException(404, str(e))
+        except db.RevisionNoBefore as e:
+            raise HTTPException(400, str(e))
+        except db.VersionConflict as e:
+            raise HTTPException(409, {
+                "code": "version_conflict",
+                "current_version": e.current_version,
+                "message": "恢复时正文已被修改，请刷新后重试",
+            })
         return {"ok": True, "version": new_version}
     finally:
         conn.close()
@@ -751,7 +855,7 @@ def api_copilot_suggest(body: SuggestIn):
 
 @app.get("/api/articles/{aid}/continue")
 def api_continue_writing(aid: int):
-    """方案 E：继续写入口——上次编辑时间、最近素材、待处理检查项。"""
+    """方案 E：继续写入口——上次编辑时间、位置、最近素材、待办、待复查引用。"""
     conn = _conn()
     try:
         art = db.get_article(conn, aid)
@@ -768,11 +872,59 @@ def api_continue_writing(aid: int):
                 "SELECT COUNT(*) AS n FROM review_issues WHERE review_id = ? AND state = 'open'", (sess["id"],)
             ).fetchone()
             pending = row["n"] if row else 0
+        needs_recheck = conn.execute(
+            "SELECT COUNT(*) AS n FROM citations WHERE article_id = ? AND status = 'active'"
+            " AND verification_status = 'needs_recheck'", (aid,),
+        ).fetchone()["n"]
+        state = db.get_editor_state(conn, aid)
+        block_ids = {b["id"] for b in art["blocks"]}
+        # 位置失效安全回退：保存的 block 已不存在 → 不返回位置（前端回退最近块）
+        pos = state.get("position") or {}
+        if pos.get("block_id") and pos["block_id"] not in block_ids:
+            pos = {}
+        # 一句可解释的"下一步"
+        if not art["blocks"]:
+            next_step = "新草稿：从第一段开始写，或先搜索/保存素材"
+        elif needs_recheck:
+            next_step = f"有 {needs_recheck} 处引用因正文变化需复查"
+        elif pending:
+            next_step = f"有 {pending} 项待处理检查"
+        else:
+            next_step = "继续上次写作位置"
         return {
             "last_edited": art["updated_at"],
             "recent_materials": mats[:3],
             "pending_review": pending,
+            "needs_recheck": needs_recheck,
+            "position": pos,
+            "next_step": next_step,
         }
+    finally:
+        conn.close()
+
+
+class PositionIn(BaseModel):
+    block_id: str = ""
+    offset: int = 0
+    scroll_top: int = 0
+
+
+@app.put("/api/articles/{aid}/position")
+def api_save_position(aid: int, body: PositionIn):
+    """保存本地写作位置（继续写）。位置不改变正文、不进模型上下文。"""
+    conn = _conn()
+    try:
+        if db.get_article(conn, aid) is None:
+            raise HTTPException(404, "草稿不存在")
+        state = db.get_editor_state(conn, aid)
+        state["position"] = {
+            "block_id": body.block_id,
+            "offset": max(0, body.offset),
+            "scroll_top": max(0, body.scroll_top),
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        db.save_editor_state(conn, aid, state)
+        return {"ok": True}
     finally:
         conn.close()
 
@@ -782,6 +934,18 @@ def api_list_asks(aid: int):
     conn = _conn()
     try:
         return {"asks": db.list_asks(conn, aid, 50)}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/asks/{ask_id}")
+def api_delete_ask(ask_id: int):
+    """删除一条 Ask 历史（P1-4：Ask 历史可管理）。"""
+    conn = _conn()
+    try:
+        if not db.delete_ask(conn, ask_id):
+            raise HTTPException(404, "问答记录不存在")
+        return {"ok": True}
     finally:
         conn.close()
 
@@ -900,7 +1064,10 @@ def api_set_binding(body: BindingIn):
 
 @app.post("/api/profiles/{pid}/test")
 def api_test_profile(pid: int):
-    """连接测试：发最小请求探测可达性，不保存任何用户内容。"""
+    """连接测试：发最小请求探测可达性，不保存任何用户内容。
+
+    P0-3：错误按 LLMError.kind 映射为明确状态码；任何响应不含 API Key。
+    """
     conn = _conn()
     try:
         p = db.get_profile(conn, pid)
@@ -913,21 +1080,48 @@ def api_test_profile(pid: int):
         client.chat([{"role": "user", "content": "ping"}], json_mode=False, max_tokens=5)
         return {"ok": True, "model": p["model"]}
     except LLMError as e:
-        raise HTTPException(502, str(e))
+        # kind: timeout → 504；其余上游失败（auth/network/http/empty）→ 502。
+        # 消息只含可读原因，绝不回显密钥。
+        status = 504 if e.kind == "timeout" else 502
+        raise HTTPException(status, f"模型连接失败：{e}")
     finally:
         conn.close()
 
 
 @app.get("/api/articles/{aid}/export")
-def api_export_article(aid: int):
+def api_export_article(aid: int, format: str = "md", appendix: int = 1):
+    """统一导出（P0-5）：Markdown / 纯文本 / Word，含引用清单与来源附录。
+
+    - format: md | txt | docx
+    - appendix=0 时省略来源附录（引用清单始终包含）
+    - 导出只读，不修改原稿
+    """
     conn = _conn()
     try:
-        art = db.get_article(conn, aid)
-        if art is None:
-            raise HTTPException(404, "草稿不存在")
-        md = f"# {art['title']}\n\n" + blocks.serialize_blocks(art["blocks"])
-        return PlainTextResponse(md, media_type="text/markdown; charset=utf-8",
-                                 headers={"Content-Disposition": f'attachment; filename="article-{aid}.md"'})
+        try:
+            data = export_service.build_export_data(conn, aid)
+        except export_service.ExportError as e:
+            raise HTTPException(404, str(e))
+        try:
+            content = export_service.render(data, format, include_appendix=bool(appendix))
+        except export_service.ExportError as e:
+            raise HTTPException(400, str(e))
+        media = {
+            "md": "text/markdown; charset=utf-8",
+            "markdown": "text/markdown; charset=utf-8",
+            "txt": "text/plain; charset=utf-8",
+            "text": "text/plain; charset=utf-8",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }[format.lower()]
+        fname = export_service.safe_filename(data["article"]["title"], format)
+        # RFC 5987：中文/特殊字符文件名在响应头中用百分号编码
+        quoted = urllib.parse.quote(fname)
+        return Response(content=content, media_type=media,
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"})
+    except export_service.ExportError as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(400, f"无法生成安全的文件名：{e}")
     finally:
         conn.close()
 

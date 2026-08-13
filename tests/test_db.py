@@ -74,20 +74,19 @@ def test_migrate_failure_rolls_back(monkeypatch):
     """迁移失败回滚：失败的版本不记录，已应用版本保留。"""
     conn = db.connect(":memory:")
     db.migrate(conn)
-    # 注入一个会失败的 v8 迁移（语法错误）
+    # 注入一个会失败的 v9 迁移（语法错误）
     monkeypatch.setattr(db, "MIGRATIONS", [
-        db.MIGRATIONS[0], db.MIGRATIONS[1], db.MIGRATIONS[2], db.MIGRATIONS[3], db.MIGRATIONS[4], db.MIGRATIONS[5],
-        db.MIGRATIONS[6],
+        *[db.MIGRATIONS[i] for i in range(8)],  # v1..v8 正常
         ["CREATE TABLE broken_table (id"],  # 未闭合，必然失败
     ])
     with pytest.raises(Exception):
         db.migrate(conn)
-    # 失败的 v8 未记录
-    n = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8").fetchone()["n"]
+    # 失败的 v9 未记录
+    n = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 9").fetchone()["n"]
     assert n == 0
-    # v1-v7 记录仍在，后续可重试
+    # v1-v8 记录仍在，后续可重试
     n2 = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
-    assert n2 == 7
+    assert n2 == 8
 
 
 # ---------- 乐观锁与原子性 ----------
@@ -112,12 +111,17 @@ def test_save_article_not_found():
 
 
 def test_save_article_revision_only_for_ai():
+    """受控原因 + 正文实质变化才写 Revision；autosave 不写。"""
     conn = db.connect(":memory:")
     db.init(conn)
     pid = db.create_project(conn, "p")
     aid = db.create_article(conn, pid, "t")
-    db.save_article(conn, aid, blocks=[], base_version=1, reason="autosave")
-    db.save_article(conn, aid, blocks=[], base_version=2, reason="ai_rewrite")
+    # autosave 且有内容变化 → 不写
+    db.save_article(conn, aid, blocks=[{"id": "b1", "type": "paragraph", "text": "v1", "attrs": {}}], base_version=1, reason="autosave")
+    # ai_rewrite 且内容变化 → 写
+    db.save_article(conn, aid, blocks=[{"id": "b1", "type": "paragraph", "text": "v2（AI）", "attrs": {}}], base_version=2, reason="ai_rewrite")
+    # 受控原因但内容无变化 → 不写（避免垃圾 revision）
+    db.save_article(conn, aid, blocks=[{"id": "b1", "type": "paragraph", "text": "v2（AI）", "attrs": {}}], base_version=3, reason="ai_rewrite")
     rows = conn.execute("SELECT reason FROM article_revisions").fetchall()
     assert len(rows) == 1
     assert rows[0]["reason"] == "ai_rewrite"

@@ -13,12 +13,14 @@
 | GET | /api/projects/{pid}/articles | 草稿列表 |
 | POST | /api/projects/{pid}/articles | 建草稿 `{title}` |
 | GET | /api/articles/{aid} | 草稿全文（blocks + version） |
-| PUT | /api/articles/{aid} | 保存 `{blocks, base_version, change_reason}`；版本冲突 409 |
+| PUT | /api/articles/{aid} | 保存 `{blocks, base_version, change_reason, source_object_type?, source_object_id?}`；版本冲突 409；正文实质变化 → 相关 Citation 自动 needs_recheck / orphaned（同一事务）；素材插入（reason=material_insert + source_object_type=material）同事务记录显式使用关系 |
 | DELETE | /api/articles/{aid} | 软删除 |
 | POST | /api/articles/{aid}/restore | 从回收站恢复 |
-| GET | /api/articles/{aid}/revisions | 版本历史 |
-| POST | /api/articles/{aid}/revisions/{v}/restore | 恢复历史版本（升新版本） |
-| GET | /api/articles/{aid}/export | Markdown 导出 |
+| GET | /api/articles/{aid}/revisions | 版本历史（含 before/after 快照、来源对象、状态） |
+| POST | /api/articles/{aid}/revisions/{v}/restore | 恢复历史版本 `?point=after|before`（after=该版本正文；before=撤销这一次插入/改写）；恢复动作本身留 Revision(revision_restore) |
+| GET | /api/articles/{aid}/export | 统一导出 `?format=md|txt|docx&appendix=0|1`（含引用清单+核验状态+来源附录；只读不改稿） |
+| GET | /api/articles/{aid}/continue | 继续写：上次位置/最近素材/待办/待复查引用/一句下一步 |
+| PUT | /api/articles/{aid}/position | 保存本地写作位置 `{block_id, offset, scroll_top}`（不改变正文/版本） |
 | GET | /api/articles/{aid}/asks | Ask 历史（按草稿隔离） |
 
 ## AI 链路（任务可绑定不同模型 profile）
@@ -36,9 +38,15 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET/POST | /api/projects/{pid}/sources | 来源列表/创建（同 URL 复用） |
-| GET/POST | /api/projects/{pid}/materials | 素材 |
+| GET/POST | /api/projects/{pid}/materials | 素材（POST 建；标签清洗去重限长） |
+| GET | /api/materials | 素材库搜索 `?q=&tag=&project_id=` |
+| GET | /api/materials/{mid} | 素材详情 |
+| PATCH | /api/materials/{mid} | 编辑标题/内容/标签（存在性 404；非法输入 422；刷新后仍在） |
+| GET | /api/materials/{mid}/usage | 真实使用关系（显式 material_usages，不靠共享 source_id 推断） |
+| DELETE | /api/materials/{mid} | `?unlink_only=1` 只解除关系（素材/正文/引用保留）；被使用未 force → 409+影响清单；`?force=1` 删素材+关系（正文/引用保留） |
 | GET/POST | /api/articles/{aid}/citations | 引用（含 orphaned 机械检查） |
 | DELETE | /api/citations/{cid} | 删除引用 |
+| POST | /api/citations/{cid}/verification | 核验状态 `{status}`（六态受控枚举，非法 422） |
 | POST | /api/projects/{pid}/fetch | 安全抓取 URL → evidence snapshot |
 
 ## 写作智能 / 记忆 / 模型

@@ -1,0 +1,10 @@
+prune web/node_modules
+prune web/test-results
+prune web/e2e-tmp
+prune web/tests
+prune data
+prune .venv
+prune dist
+prune build
+prune .git
+global-exclude *.pyc

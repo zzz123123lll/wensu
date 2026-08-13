@@ -125,15 +125,25 @@ def signals_to_state(signals: list[dict]) -> dict:
         if t == "tool_click":
             tool = s.get("tool")
             if tool == "rewrite":
-                stage = "revising"; issue = "expression"; focus = s.get("focus", "block")
+                stage = "revising"
+                issue = "expression"
+                focus = s.get("focus", "block")
             elif tool == "search":
-                stage = "checking"; issue = "facts"; focus = s.get("focus", "block")
+                stage = "checking"
+                issue = "facts"
+                focus = s.get("focus", "block")
             elif tool == "check":
-                stage = "checking"; issue = "facts"; focus = s.get("focus", "block")
+                stage = "checking"
+                issue = "facts"
+                focus = s.get("focus", "block")
             elif tool == "ask":
-                stage = "incubating"; issue = "ideas"; focus = s.get("focus", "article")
+                stage = "incubating"
+                issue = "ideas"
+                focus = s.get("focus", "article")
         elif t == "accept":
-            stage = "revising"; issue = "expression"; focus = s.get("focus", "block")
+            stage = "revising"
+            issue = "expression"
+            focus = s.get("focus", "block")
         elif t == "reject":
             stage = "revising"
         elif t == "mark":

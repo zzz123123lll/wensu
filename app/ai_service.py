@@ -102,7 +102,7 @@ def _parse_rewrite(raw: str, fallback_text: str) -> list[dict]:
     except (ValueError, AttributeError):
         pass
     # 降级：按行拆分
-    lines = [l.strip() for l in re.split(r"\n+", raw) if l.strip()]
+    lines = [ln.strip() for ln in re.split(r"\n+", raw) if ln.strip()]
     if lines:
         return [{"label": "方案一", "text": lines[0][:500]}]
     return [{"label": "方案一", "text": fallback_text[:500]}]

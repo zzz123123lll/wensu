@@ -38,7 +38,7 @@ def main() -> None:
     backup = _daily_backup()
     if backup:
         print(f"[wensu] 已备份数据库 → {backup}")
-    print(f"[wensu] 文序已启动：http://127.0.0.1:8766")
+    print("[wensu] 文序已启动：http://127.0.0.1:8766")
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8766")).start()
     uvicorn.run(app, host="127.0.0.1", port=8766)
 

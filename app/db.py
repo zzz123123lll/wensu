@@ -14,12 +14,15 @@ from datetime import datetime, timezone
 
 from app.settings import _decrypt as settings_decrypt
 
-# 默认数据库路径（基于文件位置，任意 CWD 可启动）
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "workbench.db")
+# 默认数据库路径（基于文件位置，任意 CWD 可启动；WENSU_DB 环境变量可覆盖——测试隔离用）
+DB_PATH = os.environ.get(
+    "WENSU_DB",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "workbench.db"),
+)
 
-# 仅 AI 接受/核验修订/冲突恢复等明确边界写入最小不可变修订日志；
+# 受控 Revision 原因（P0-4 统一契约）：AI 接受/核验/冲突恢复/素材插入/Ask 插入/版本恢复。
 # 普通 autosave 不制造历史记录（v0.2 无历史 UI）。
-REVISION_REASONS = ("ai_rewrite", "ai_check", "conflict_recovery")
+REVISION_REASONS = ("ai_rewrite", "ai_check", "conflict_recovery", "material_insert", "ask_insert", "revision_restore")
 
 
 class NotFoundError(Exception):
@@ -33,6 +36,14 @@ class VersionConflict(Exception):
         super().__init__(f"version conflict: article {article_id} at {current_version}")
         self.article_id = article_id
         self.current_version = current_version
+
+
+class RevisionNoBefore(Exception):
+    """point=before 但该 Revision 无修改前快照（旧数据兼容防护）。"""
+
+    def __init__(self, what: str):
+        super().__init__(what)
+        self.what = what
 
 
 def _now() -> str:
@@ -220,6 +231,28 @@ MIGRATIONS: list[list[str]] = [
         "ALTER TABLE citations ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
         "CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id)",
     ],
+    # v8（Gate B）：Material 显式使用关系 + Revision 契约扩展
+    # - material_usages：Material↔Draft/Citation 的真实关系（不再靠共享 source_id 推断）
+    # - article_revisions：before 快照 / 作用范围 / 来源对象 / 处理状态（统一 Revision 契约）
+    [
+        "CREATE TABLE IF NOT EXISTS material_usages ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,"
+        " article_id INTEGER NOT NULL REFERENCES articles(id),"
+        " block_id TEXT,"
+        " claim_id INTEGER REFERENCES citations(id),"
+        " usage_type TEXT NOT NULL DEFAULT 'insert',"
+        " created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_mat_usage_material ON material_usages(material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_mat_usage_article ON material_usages(article_id)",
+        "ALTER TABLE article_revisions ADD COLUMN before_blocks_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE article_revisions ADD COLUMN scope TEXT NOT NULL DEFAULT 'blocks'",
+        "ALTER TABLE article_revisions ADD COLUMN source_object_type TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE article_revisions ADD COLUMN source_object_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE article_revisions ADD COLUMN status TEXT NOT NULL DEFAULT 'applied'",
+        # P1-5：继续写位置（本地写作状态；不进模型上下文，不随正文保存）
+        "ALTER TABLE articles ADD COLUMN editor_state_json TEXT NOT NULL DEFAULT '{}'",
+    ],
 ]
 
 
@@ -334,6 +367,25 @@ def get_article(conn: sqlite3.Connection, aid: int) -> dict | None:
     }
 
 
+def diff_block_texts(old_blocks: list, new_blocks: list) -> tuple[set, set]:
+    """正文块 diff：返回 (changed_ids, deleted_ids)。
+
+    - changed：文本/类型实质变化的既有 block，以及新增 block（防御性：若被引用则失效）
+    - deleted：旧正文存在但新正文缺失的 block（对应 Citation 进入 orphaned）
+    只比较 id/text/type——attrs 变化不视为正文主张实质变化。
+    """
+    old_map = {b.get("id"): b for b in (old_blocks or []) if b.get("id")}
+    new_map = {b.get("id"): b for b in (new_blocks or []) if b.get("id")}
+    changed = {
+        bid for bid, nb in new_map.items()
+        if bid not in old_map
+        or old_map[bid].get("text") != nb.get("text")
+        or old_map[bid].get("type") != nb.get("type")
+    }
+    deleted = {bid for bid in old_map if bid not in new_map}
+    return changed, deleted
+
+
 def save_article(
     conn: sqlite3.Connection,
     aid: int,
@@ -341,11 +393,21 @@ def save_article(
     blocks: list | None = None,
     base_version: int | None = None,
     reason: str = "autosave",
+    before_blocks: list | None = None,
+    source_object_type: str = "",
+    source_object_id: str = "",
+    scope: str = "blocks",
+    material_usage: tuple | None = None,
 ) -> int:
-    """原子保存：标题/正文 + version 递增 + 必要 revision 同一事务。
+    """原子保存：标题/正文 + version 递增 + Revision + Citation 失效/孤立 同一事务。
 
-    - 文章不存在 → NotFoundError
-    - base_version 与当前版本不符 → VersionConflict（服务端当前版本随异常携带）
+    - 文章不存在 → NotFoundError（写前抛出，零副作用）
+    - base_version 与当前版本不符 → VersionConflict（写前抛出，零副作用）
+    - before_blocks：覆盖前的旧正文快照（调用方先读再写）；据此计算
+      changed/deleted block，同事务内把相关活动 Citation 置 needs_recheck /
+      orphaned——任何异常整体回滚，不产生半成品。
+    - material_usage=(material_id, block_id)：素材插入正文时同事务记录显式使用关系
+      （P0-6；素材不存在/跨项目 → NotFoundError，整体回滚）
     - 返回新 version
     """
     row = conn.execute("SELECT version FROM articles WHERE id = ?", (aid,)).fetchone()
@@ -355,6 +417,20 @@ def save_article(
         raise VersionConflict(aid, row["version"])
 
     new_version = row["version"] + 1
+    changed_ids: set[str] = set()
+    deleted_ids: set[str] = set()
+    if blocks is not None:
+        # before_blocks 未显式传入时：事务内读覆盖前的数据库快照（兼容旧调用路径）
+        if before_blocks is None:
+            old_row = conn.execute(
+                "SELECT blocks_json FROM articles WHERE id = ?", (aid,)
+            ).fetchone()
+            try:
+                before_blocks = json.loads(old_row["blocks_json"] or "[]") if old_row else []
+            except ValueError:
+                before_blocks = []
+        changed_ids, deleted_ids = diff_block_texts(before_blocks, blocks)
+
     sets: list[str] = []
     params: list = []
     if title is not None and title.strip():
@@ -374,11 +450,43 @@ def save_article(
         conn.rollback()
         raise NotFoundError(f"article {aid}")
 
-    if blocks is not None and reason in REVISION_REASONS:
+    # 统一 Revision 契约（P0-4）：受控原因 + 正文实质变化才记录；before/after 都在
+    if blocks is not None and reason in REVISION_REASONS and (changed_ids or deleted_ids):
         conn.execute(
-            "INSERT INTO article_revisions (article_id, version, blocks_json, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-            (aid, new_version, json.dumps(blocks, ensure_ascii=False), reason, _now()),
+            "INSERT INTO article_revisions (article_id, version, blocks_json, before_blocks_json,"
+            " reason, scope, source_object_type, source_object_id, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, new_version, json.dumps(blocks, ensure_ascii=False),
+             json.dumps(before_blocks or [], ensure_ascii=False),
+             reason, scope, source_object_type, source_object_id, "applied", _now()),
         )
+
+    # 正文主张实质变化 → 相关活动 Citation 自动 needs_recheck（同一事务，P0-1）
+    if changed_ids:
+        _invalidate_citations(conn, aid, changed_ids)
+    # 被删除 Block 的 Citation → 明确 orphaned（同一事务）
+    if deleted_ids:
+        _orphan_citations(conn, aid, deleted_ids)
+
+    # 素材插入 → 显式使用关系（同一事务；同项目校验）
+    if material_usage is not None:
+        mid_, bid_ = material_usage
+        row = conn.execute(
+            "SELECT m.project_id AS mp, a.project_id AS ap FROM materials m, articles a"
+            " WHERE m.id = ? AND a.id = ?", (mid_, aid),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            raise NotFoundError(f"素材 {mid_} 或草稿 {aid} 不存在")
+        if row["mp"] != row["ap"]:
+            conn.rollback()
+            raise NotFoundError("素材与草稿不属于同一项目")
+        conn.execute(
+            "INSERT INTO material_usages (material_id, article_id, block_id, usage_type, created_at)"
+            " VALUES (?, ?, ?, 'insert', ?)",
+            (mid_, aid, bid_, _now()),
+        )
+
     conn.commit()
     return new_version
 
@@ -419,6 +527,15 @@ def list_sources(conn, project_id: int) -> list[dict]:
 
 
 def create_material(conn, project_id: int, title: str, content: str = "", source_id: int | None = None, tags: list[str] | None = None) -> int:
+    """创建素材；source_id 提供时必须存在且属于同一项目（P1-2 越权防护）。"""
+    if source_id is not None:
+        row = conn.execute(
+            "SELECT project_id FROM sources WHERE id = ?", (source_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"来源 {source_id} 不存在")
+        if row["project_id"] != project_id:
+            raise NotFoundError("来源不属于该素材项目")
     meta = {"saved_via": "search", "accessed_at": _now(), "usage": "unused"}
     cur = conn.execute(
         "INSERT INTO materials (project_id, source_id, title, content, tags, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -462,24 +579,94 @@ def list_materials(conn, project_id: int | None = None, q: str = "", tag: str = 
 
 
 def get_material(conn, material_id: int) -> dict | None:
-    rows = list_materials(conn)
-    return next((m for m in rows if m["id"] == material_id), None)
+    """单素材读取：只查一行（避免 list_materials 全表扫描+LEFT JOIN）。"""
+    row = conn.execute(
+        "SELECT m.*, s.url, s.canonical_url, s.title AS source_title, s.provider"
+        " FROM materials m LEFT JOIN sources s ON s.id = m.source_id"
+        " WHERE m.id = ?", (material_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        d["tags"] = json.loads(d.get("tags") or "[]")
+    except Exception:
+        d["tags"] = []
+    try:
+        d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+    except Exception:
+        d["metadata"] = {}
+    return d
+
+
+def record_material_usage(conn: sqlite3.Connection, material_id: int, article_id: int,
+                          block_id: str | None = None, claim_id: int | None = None,
+                          usage_type: str = "insert") -> int:
+    """记录 Material→Draft 显式使用关系（P0-6：不再靠共享 source_id 推断）。
+
+    - 同项目校验：素材与草稿必须属于同一 Project（P1-2），否则 NotFoundError
+    - usage_type：insert（素材插入正文）| citation（素材关联引用）
+    """
+    row = conn.execute(
+        "SELECT m.project_id AS mp, a.project_id AS ap FROM materials m, articles a"
+        " WHERE m.id = ? AND a.id = ?", (material_id, article_id),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("素材或草稿不存在")
+    if row["mp"] != row["ap"]:
+        raise NotFoundError("素材与草稿不属于同一项目")
+    cur = conn.execute(
+        "INSERT INTO material_usages (material_id, article_id, block_id, claim_id, usage_type, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (material_id, article_id, block_id, claim_id, usage_type, _now()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_material_usages(conn: sqlite3.Connection, material_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT mu.id, mu.article_id, mu.block_id, mu.claim_id, mu.usage_type, mu.created_at,"
+        " a.title AS article_title"
+        " FROM material_usages mu JOIN articles a ON a.id = mu.article_id"
+        " WHERE mu.material_id = ? ORDER BY mu.id", (material_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def unlink_material(conn: sqlite3.Connection, material_id: int) -> int:
+    """解除素材的全部使用关系（保留 Material/Citation/正文）。返回解除条数。"""
+    cur = conn.execute("DELETE FROM material_usages WHERE material_id = ?", (material_id,))
+    conn.commit()
+    return cur.rowcount
 
 
 def material_usage(conn, material_id: int) -> dict:
-    """删除影响范围：该素材（及其来源）被哪些草稿引用。方案 A：删除前必须展示影响。"""
+    """真实影响范围：基于 material_usages 显式关系表。
+
+    - material 不存在 → {"material": None, ...}
+    - usages：素材被哪些草稿/引用使用（旧数据无记录 → 空列表，不伪造）
+    """
     m = conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
     if m is None:
-        return {"material": None, "citations": [], "articles": []}
-    cites = conn.execute(
-        "SELECT c.id, c.article_id, c.quote, a.title AS article_title "
-        "FROM citations c LEFT JOIN articles a ON a.id = c.article_id "
-        "WHERE c.source_id = ? AND c.status = 'active'", (m["source_id"],)
-    ).fetchall()
+        return {"material": None, "usages": [], "citations": [], "articles": []}
+    usages = list_material_usages(conn, material_id)
+    citations: list[dict] = []
+    if usages:
+        claim_ids = [u["claim_id"] for u in usages if u["claim_id"]]
+        if claim_ids:
+            marks = ",".join("?" * len(claim_ids))
+            rows = conn.execute(
+                "SELECT c.*, s.url AS source_url, s.title AS source_title"
+                " FROM citations c JOIN sources s ON s.id = c.source_id"
+                " WHERE c.id IN (" + marks + ")", claim_ids,
+            ).fetchall()
+            citations = [dict(r) for r in rows]
     return {
         "material": dict(m),
-        "citations": [dict(x) for x in cites],
-        "articles": sorted({x["article_id"] for x in cites}),
+        "usages": usages,
+        "citations": citations,
+        "articles": sorted({u["article_id"] for u in usages}),
     }
 
 
@@ -604,11 +791,19 @@ def soft_delete_project(conn, pid: int) -> bool:
 
 
 def list_revisions(conn, aid: int) -> list[dict]:
+    """版本记录（统一 Revision 契约字段：before/after、作用范围、来源对象、状态）。"""
     rows = conn.execute(
-        "SELECT id, version, reason, created_at FROM article_revisions"
-        " WHERE article_id = ? ORDER BY version DESC", (aid,)
+        "SELECT id, version, blocks_json, before_blocks_json, reason, scope,"
+        " source_object_type, source_object_id, status, created_at"
+        " FROM article_revisions WHERE article_id = ? ORDER BY version DESC", (aid,)
     ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["after_blocks"] = json.loads(d.pop("blocks_json") or "[]")
+        d["before_blocks"] = json.loads(d.pop("before_blocks_json") or "[]")
+        out.append(d)
+    return out
 
 
 def get_revision(conn, aid: int, version: int) -> dict | None:
@@ -619,20 +814,58 @@ def get_revision(conn, aid: int, version: int) -> dict | None:
         return None
     d = dict(row)
     d["blocks"] = json.loads(d.pop("blocks_json") or "[]")
+    d["before_blocks"] = json.loads(d.pop("before_blocks_json") or "[]")
     return d
 
 
-def restore_revision(conn, aid: int, version: int) -> int:
-    """恢复历史版本：blocks 写回并升新版本（reason=restore）。"""
+def restore_revision(conn, aid: int, version: int, point: str = "after") -> int:
+    """恢复历史版本并升新版本。
+
+    - point=after：恢复到该 Revision 的 after 快照（默认，等同该版本正文）
+    - point=before：恢复到该 Revision 的 before 快照（= 撤销这一次插入/改写）
+    - reason=revision_restore（受控枚举，恢复动作本身也留 Revision，可再恢复）
+    - 恢复会触发正文变化检测：引用该正文的 Citation 自动 needs_recheck
+    - 防护：旧数据 Revision 无 before 快照（v8 前 ai_rewrite 等未记录）时，
+      point=before 拒绝（400 语义），防止把全文恢复成空数组清空文章
+    """
     rev = get_revision(conn, aid, version)
     if rev is None:
         raise NotFoundError(f"版本 {version} 不存在")
-    return save_article(conn, aid, blocks=rev["blocks"], base_version=None, reason="restore")
+    if point == "before" and not rev["before_blocks"]:
+        raise RevisionNoBefore(f"版本 {version} 没有修改前快照（旧数据），无法撤销；请改用恢复此版本")
+    target = rev["before_blocks"] if point == "before" else rev["blocks"]
+    # 乐观锁：以当前版本为基线，避免与并发 autosave 竞争静默覆盖（审查建议）
+    cur_row = conn.execute("SELECT version FROM articles WHERE id = ?", (aid,)).fetchone()
+    cur_version = cur_row["version"] if cur_row else None
+    return save_article(
+        conn, aid, blocks=target, base_version=cur_version,
+        reason="revision_restore", source_object_type="revision",
+        source_object_id=f"{version}:{point}",
+    )
 
 
 # ---------- Phase 7：Ask 历史 / 作者记忆 / 多模型 ----------
 
 ASK_KEEP = 30   # checkpoint：超过即裁剪，保留最近 30 条
+
+def delete_ask(conn: sqlite3.Connection, ask_id: int) -> bool:
+    """删除一条 Ask 历史。"""
+    cur = conn.execute("DELETE FROM article_asks WHERE id = ?", (ask_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_ask(conn: sqlite3.Connection, ask_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM article_asks WHERE id = ?", (ask_id,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    try:
+        d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+    except ValueError:
+        d["metadata"] = {}
+    return d
+
 
 def record_ask(conn, article_id: int, prompt: str, response: str = "", model: str = "", metadata: dict | None = None) -> int:
     cur = conn.execute(
@@ -698,19 +931,71 @@ def set_citation_verification(conn, citation_id: int, status: str, note: str = "
     return cur.rowcount > 0
 
 
-def invalidate_citations_on_edit(conn, aid: int, changed_block_ids: set[str]) -> int:
-    """方案 C：正文主张实质变化 → 相关引用核验状态自动失效（needs_recheck）。"""
+def _invalidate_citations(conn: sqlite3.Connection, aid: int, changed_block_ids: set[str]) -> None:
+    """事务内原语：正文实质变化 → 活动 Citation 置 needs_recheck（不提交，由外层事务控制）。"""
     if not changed_block_ids:
-        return 0
+        return
     marks = ",".join("?" * len(changed_block_ids))
-    cur = conn.execute(
+    conn.execute(
         f"UPDATE citations SET verification_status = '{VERIF_NEEDS_RECHECK}'"
         " WHERE article_id = ? AND block_id IN (" + marks + ") AND status = 'active'"
-        " AND verification_status NOT IN ('" + VERIF_NEEDS_RECHECK + "')",
+        " AND verification_status != '" + VERIF_NEEDS_RECHECK + "'",
         (aid, *changed_block_ids),
     )
+
+
+def _orphan_citations(conn: sqlite3.Connection, aid: int, deleted_block_ids: set[str]) -> None:
+    """事务内原语：被删除 Block 的 Citation → 明确 orphaned（不提交，由外层事务控制）。"""
+    if not deleted_block_ids:
+        return
+    marks = ",".join("?" * len(deleted_block_ids))
+    conn.execute(
+        "UPDATE citations SET status = 'orphaned'"
+        " WHERE article_id = ? AND block_id IN (" + marks + ") AND status = 'active'",
+        (aid, *deleted_block_ids),
+    )
+
+
+def invalidate_citations_on_edit(conn, aid: int, changed_block_ids: set[str]) -> int:
+    """兼容入口（旧测试直接调用）：正文块实质变化 → 活动 Citation 失效并提交。"""
+    if not changed_block_ids:
+        return 0
+    _invalidate_citations(conn, aid, changed_block_ids)
     conn.commit()
-    return cur.rowcount
+    # 返回受影响行数
+    marks = ",".join("?" * len(changed_block_ids))
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM citations WHERE article_id = ? AND block_id IN ("
+        + marks + ") AND status = 'active'",
+        (aid, *changed_block_ids),
+    ).fetchone()
+    return row["n"]
+
+
+def save_editor_state(conn: sqlite3.Connection, aid: int, state: dict) -> bool:
+    """保存本地写作状态（继续写位置：block_id/offset/scroll_top）。
+
+    与正文分离：位置是本地写作状态，不泄漏到模型上下文，也不随正文保存。
+    """
+    cur = conn.execute(
+        "UPDATE articles SET editor_state_json = ? WHERE id = ?",
+        (json.dumps(state, ensure_ascii=False), aid),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_editor_state(conn: sqlite3.Connection, aid: int) -> dict:
+    row = conn.execute(
+        "SELECT editor_state_json FROM articles WHERE id = ?", (aid,)
+    ).fetchone()
+    if not row:
+        return {}
+    try:
+        state = json.loads(row["editor_state_json"] or "{}")
+    except ValueError:
+        return {}
+    return state if isinstance(state, dict) else {}
 
 
 def add_pref(conn, key: str, content: str, source: str = "user") -> int:

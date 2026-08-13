@@ -43,12 +43,19 @@ def test_material_with_tags_and_search(conn):
 
 
 def test_material_usage_and_protected_delete(conn):
+    """P0-6：影响范围只来自显式 material_usages，不靠共享 source_id 推断。"""
     pid, aid = _mk(conn)
     sid = _mk_source(conn, pid)
     mid = db.create_material(conn, pid, "素材", "内容", sid)
     db.create_citation(conn, aid, "b1", sid, "引文", "", "来源")
+    # 无显式关系 → 不伪造关联（即使共享 source_id）
     usage = db.material_usage(conn, mid)
-    assert len(usage["citations"]) == 1  # 影响范围：1 处引用
+    assert usage["citations"] == []
+    assert usage["articles"] == []
+    # 显式记录使用关系 → 影响范围可见
+    db.record_material_usage(conn, mid, aid, block_id="b1", usage_type="insert")
+    usage = db.material_usage(conn, mid)
+    assert len(usage["usages"]) == 1
     assert usage["articles"] == [aid]
 
 

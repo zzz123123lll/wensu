@@ -1,7 +1,6 @@
 """review 数据访问：review_sessions / issues / variant_patches / exports / 规则覆盖。"""
 
 import json
-import sqlite3
 from datetime import datetime, timezone
 
 
