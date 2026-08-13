@@ -142,6 +142,10 @@ def validate_rule(d: dict) -> Rule:
     # 渠道规则必须携带来源（官方/用户配置），防伪硬规则
     if r.source is None and r.category == "channel":
         raise ReviewRuleError(f"规则 {r.id} 缺少来源（渠道规则必须有 source）")
+    # 来源门禁：官方规则必须有可核验 URL 与核验日期（防伪硬规则）
+    if r.source and r.source.type == "official":
+        if not r.source.url or not r.source.verified_at:
+            raise ReviewRuleError(f"规则 {r.id} 的官方来源缺少 URL 或核验日期（verified_at）")
     return r
 
 

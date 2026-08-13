@@ -83,6 +83,23 @@ def test_reject_missing_source_for_official():
         models.validate_rule(d)
 
 
+def test_official_rule_requires_url_and_verified_at():
+    """来源门禁：official 规则必须 url + verified_at（防伪硬规则）。"""
+    with pytest.raises(models.ReviewRuleError):
+        models.validate_rule(_good_rule(source={"type": "official", "title": "t"}))
+    with pytest.raises(models.ReviewRuleError):
+        models.validate_rule(_good_rule(source={"type": "official", "title": "t", "url": "https://x.com"}))
+    # 完整官方来源通过
+    r = models.validate_rule(_good_rule(source={"type": "official", "title": "t", "url": "https://x.com", "verified_at": "2026-08-13"}))
+    assert r.source.type == "official"
+
+
+def test_experience_rule_without_url_ok():
+    """经验规则不需要 URL（诚实标注为经验建议）。"""
+    r = models.validate_rule(_good_rule(source={"type": "experience", "title": "编辑经验"}))
+    assert r.source.type == "experience"
+
+
 # ---------- 规则包加载 ----------
 
 def test_pack_load_rejects_duplicate_ids():

@@ -7,8 +7,11 @@ from app.review import models
 
 _PACKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")
 
-# 内置包清单（Phase 1 最小：通用基础 + 观点长文）
-BUILTIN_PACK_IDS = ["common-markdown", "opinion-essay"]
+# 内置包清单（Phase 5：通用 + 类型 + 渠道全量）
+BUILTIN_PACK_IDS = [
+    "common-markdown", "opinion-essay", "academic", "work-report",
+    "wechat-mini", "zhihu", "toutiao", "blog",
+]
 
 
 def load_pack_file(pack_id: str) -> models.RulePack:

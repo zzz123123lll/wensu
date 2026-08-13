@@ -1,0 +1,53 @@
+{
+  "pack_id": "wechat-mini",
+  "pack_version": "1.0.0",
+  "name": "微信公众号",
+  "description": "移动端阅读的编辑经验建议。无官方硬规则（平台要求未经本次核验，不得写成平台要求）；官方规则需用户核验官方文档后添加。",
+  "rules": [
+    {
+      "id": "wechat.readability.paragraph-length",
+      "name": "段落长度（移动阅读）",
+      "description": "手机屏幕阅读，段落不宜过长",
+      "pack_id": "wechat-mini",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "移动阅读编辑经验（未完成核验，无官方硬性标准）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "wechat.structure.heading-clarity",
+      "name": "小标题层级清晰",
+      "description": "正文小标题便于手机端扫读",
+      "pack_id": "wechat-mini",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "移动阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "wechat.evidence.citation-links",
+      "name": "引用附来源",
+      "description": "引用数据时建议附上可点击来源链接，便于读者核验",
+      "pack_id": "wechat-mini",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "evidence",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    }
+  ]
+}

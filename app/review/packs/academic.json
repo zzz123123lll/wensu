@@ -1,0 +1,38 @@
+{
+  "pack_id": "academic",
+  "pack_version": "1.0.0",
+  "name": "学术文章",
+  "description": "摘要、章节、术语、引文与参考文献一致性框架。按用户选择的规范/模板配置后启用（默认禁用，不声称任何规范格式合规）。",
+  "rules": [
+    {
+      "id": "academic.structure.sections",
+      "name": "章节结构完整",
+      "description": "按所选模板检查章节结构（需用户配置模板要求）",
+      "pack_id": "academic",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "deterministic",
+      "scope": "master",
+      "severity": "warning",
+      "enabled": false,
+      "params": {"required_sections": []},
+      "source": {"type": "user", "title": "用户选择的规范/模板"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "academic.references.consistency",
+      "name": "参考文献一致性",
+      "description": "正文引用与文末参考文献对应（需用户配置引用规范）",
+      "pack_id": "academic",
+      "pack_version": "1.0.0",
+      "category": "evidence",
+      "engine": "deterministic",
+      "scope": "master",
+      "severity": "warning",
+      "enabled": false,
+      "params": {},
+      "source": {"type": "user", "title": "用户选择的引用规范"},
+      "fix_mode": "advisory"
+    }
+  ]
+}

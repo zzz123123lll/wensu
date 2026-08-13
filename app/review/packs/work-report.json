@@ -1,0 +1,38 @@
+{
+  "pack_id": "work-report",
+  "pack_version": "1.0.0",
+  "name": "工作报告",
+  "description": "目的、结论、事实、责任项与单位模板框架。按单位模板配置后启用（默认禁用）。",
+  "rules": [
+    {
+      "id": "work-report.structure.template",
+      "name": "单位模板结构",
+      "description": "按单位模板检查章节（需用户配置模板要求）",
+      "pack_id": "work-report",
+      "pack_version": "1.0.0",
+      "category": "content",
+      "engine": "deterministic",
+      "scope": "master",
+      "severity": "warning",
+      "enabled": false,
+      "params": {"required_sections": []},
+      "source": {"type": "user", "title": "用户/组织模板"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "work-report.facts.attribution",
+      "name": "事实与责任项",
+      "description": "关键事实应可核验，责任项应明确（需用户配置口径）",
+      "pack_id": "work-report",
+      "pack_version": "1.0.0",
+      "category": "evidence",
+      "engine": "evidence",
+      "scope": "master",
+      "severity": "suggestion",
+      "enabled": false,
+      "params": {},
+      "source": {"type": "user", "title": "用户/组织模板"},
+      "fix_mode": "advisory"
+    }
+  ]
+}

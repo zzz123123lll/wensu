@@ -1,0 +1,23 @@
+{
+  "pack_id": "blog",
+  "pack_version": "1.0.0",
+  "name": "个人博客",
+  "description": "按用户选择的 Markdown 渲染能力与站点约束检查。规则默认禁用，由用户在规则设置中按自己的渲染器配置启用。",
+  "rules": [
+    {
+      "id": "blog.renderer.unsupported",
+      "name": "渲染器不支持的元素",
+      "description": "检查正文中是否有你的博客渲染器不支持的元素（需用户配置支持项）",
+      "pack_id": "blog",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "deterministic",
+      "scope": "variant",
+      "severity": "warning",
+      "enabled": false,
+      "params": {"supported": ["heading", "paragraph", "blockquote", "link", "image"]},
+      "source": {"type": "user", "title": "用户配置的渲染器约束"},
+      "fix_mode": "advisory"
+    }
+  ]
+}

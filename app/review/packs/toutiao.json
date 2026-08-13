@@ -1,0 +1,53 @@
+{
+  "pack_id": "toutiao",
+  "pack_version": "1.0.0",
+  "name": "头条号",
+  "description": "头条号信息流阅读的编辑经验建议。无官方硬规则（平台要求未经本次核验）；官方规则需用户核验后添加。",
+  "rules": [
+    {
+      "id": "toutiao.open.hook",
+      "name": "开头直入主题",
+      "description": "信息流场景开头应尽快给出核心信息，避免长铺垫",
+      "pack_id": "toutiao",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "信息流阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "toutiao.paragraph.short",
+      "name": "段落短促",
+      "description": "信息流阅读段落宜短，降低跳读成本",
+      "pack_id": "toutiao",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "信息流阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "toutiao.end.conclusion",
+      "name": "结论明确",
+      "description": "结尾给出明确结论或行动指向",
+      "pack_id": "toutiao",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "信息流阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    }
+  ]
+}

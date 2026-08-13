@@ -1,0 +1,53 @@
+{
+  "pack_id": "zhihu",
+  "pack_version": "1.0.0",
+  "name": "知乎",
+  "description": "知乎长文阅读的编辑经验建议。无官方硬规则（平台要求未经本次核验）；官方规则需用户核验后添加。",
+  "rules": [
+    {
+      "id": "zhihu.structure.problem-awareness",
+      "name": "开头有明确问题意识",
+      "description": "知乎读者带着问题来，开头应点明问题/立场",
+      "pack_id": "zhihu",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "知乎阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "zhihu.argument.evidence-density",
+      "name": "论据密度",
+      "description": "观点应有案例/数据/引用支撑，避免纯断言",
+      "pack_id": "zhihu",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "知乎阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    },
+    {
+      "id": "zhihu.language.tone",
+      "name": "语气与论证",
+      "description": "保持论证语气一致，避免情绪化表达",
+      "pack_id": "zhihu",
+      "pack_version": "1.0.0",
+      "category": "channel",
+      "engine": "ai",
+      "scope": "variant",
+      "severity": "suggestion",
+      "enabled": true,
+      "params": {},
+      "source": {"type": "experience", "title": "知乎阅读编辑经验（未完成核验）"},
+      "fix_mode": "advisory"
+    }
+  ]
+}
