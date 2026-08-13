@@ -453,22 +453,28 @@ def api_save_settings(body: SettingsIn):
         conn.close()
 
 
+def _build_ask_context(conn, body: AskIn) -> str:
+    """Ask 上下文：作者偏好（透明可删）+ 草稿内最近问答历史（按稿隔离）。"""
+    prefs = db.get_prefs_map(conn)
+    ctx = body.context
+    if prefs:
+        pref_block = "作者写作偏好（来自用户明确保存的记忆）：" + "；".join(f"{k}：{v}" for k, v in prefs.items())
+        ctx = pref_block + ("\n\n" + ctx if ctx else "")
+    history = db.list_asks(conn, body.article_id, 6) if body.article_id else []
+    if history:
+        hist_block = "本草稿最近的问答（作为上下文，保持对话连贯）：\n" + "\n".join(
+            f"问：{h['prompt'][:300]}\n答：{h['response'][:300]}" for h in reversed(history)
+        )
+        ctx = (ctx + "\n\n" if ctx else "") + hist_block
+    return ctx
+
+
 @app.post("/api/ai/ask")
 def api_ai_ask(body: AskIn):
     conn = _conn()
     try:
         # 作者记忆注入（透明：设置中可查看/删除）；Ask 历史按草稿隔离注入
-        prefs = db.get_prefs_map(conn)
-        ctx = body.context
-        if prefs:
-            pref_block = "作者写作偏好（来自用户明确保存的记忆）：" + "；".join(f"{k}：{v}" for k, v in prefs.items())
-            ctx = pref_block + ("\n\n" + ctx if ctx else "")
-        history = db.list_asks(conn, body.article_id, 6) if body.article_id else []
-        if history:
-            hist_block = "本草稿最近的问答（作为上下文，保持对话连贯）：\n" + "\n".join(
-                f"问：{h['prompt'][:300]}\n答：{h['response'][:300]}" for h in reversed(history)
-            )
-            ctx = (ctx + "\n\n" if ctx else "") + hist_block
+        ctx = _build_ask_context(conn, body)
         answer = ai_service.ask(conn, body.prompt, ctx)
         model = ai_service.model_name_for(conn, "ask")
         ask_id = None
@@ -479,6 +485,25 @@ def api_ai_ask(body: AskIn):
         raise _ai_error(e)
     finally:
         conn.close()
+
+
+@app.post("/api/ai/ask/stream")
+def api_ai_ask_stream(body: AskIn):
+    """Ask token 流式：NDJSON 事件（token… → result{reply,model,ask_id} | error）。
+
+    历史记录在 result 前落库；连接在流生成器内创建/关闭（线程安全）。
+    """
+
+    def gen():
+        conn = _conn()
+        try:
+            ctx = _build_ask_context(conn, body)
+            for ev in ai_service.ask_stream(conn, body.prompt, ctx, article_id=body.article_id):
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        finally:
+            conn.close()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/api/ai/rewrite")
@@ -496,6 +521,23 @@ def api_ai_rewrite(body: RewriteIn):
         raise _ai_error(e)
     finally:
         conn.close()
+
+
+@app.post("/api/ai/rewrite/stream")
+def api_ai_rewrite_stream(body: RewriteIn):
+    """改写 token 流式：NDJSON 事件（token… → result{candidates} | error）。"""
+    if body.flavor not in ai_service.REWRITE_FLAVORS:
+        raise HTTPException(400, f"未知改写模式：{body.flavor}")
+
+    def gen():
+        conn = _conn()
+        try:
+            for ev in ai_service.rewrite_stream(conn, body.text, flavor=body.flavor):
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        finally:
+            conn.close()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/api/ai/title-score")

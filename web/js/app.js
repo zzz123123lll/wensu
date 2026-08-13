@@ -716,6 +716,73 @@ function addPanelCard(title, body, opts = {}) {
 $('#ask-send').addEventListener('click', sendAsk);
 $('#ask-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendAsk(); });
 
+/* NDJSON 流读取（POST）：逐行回调事件；非 2xx 抛错（调用方回退） */
+async function streamNdjson(url, body, onEvent) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error('流不可用 ' + resp.status);
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try { onEvent(JSON.parse(line)); } catch { /* 坏行忽略 */ }
+    }
+  }
+}
+
+/* 回答卡完成态：标题带模型名 + 保存为素材/插入正文/记住偏好 */
+function finalizeAskCard(card, r, promptText) {
+  const head = card.querySelector('.ins-t');
+  if (head) head.textContent = '回答' + (r.model ? ' · ' + r.model : '');
+  const acts = document.createElement('div');
+  acts.className = 'res-acts';
+  acts.style.marginTop = '6px';
+  const saveMat = document.createElement('button');
+  saveMat.className = 'mini2';
+  saveMat.textContent = '保存为素材';
+  saveMat.onclick = () => saveAskAsMaterial(r, promptText);
+  const insertBody = document.createElement('button');
+  insertBody.className = 'mini2';
+  insertBody.textContent = '插入正文';
+  insertBody.onclick = () => insertAskToBody(r, promptText);
+  const remember = document.createElement('button');
+  remember.className = 'mini2';
+  remember.textContent = '记住偏好';
+  remember.title = '把这条回答里的写作偏好存进记忆（设置中可删）';
+  remember.onclick = () => {
+    const key = prompt('偏好名（如：文风）');
+    if (!key) return;
+    const content = prompt('偏好的内容（如：多用短句）');
+    if (!content) return;
+    api('/api/prefs', { method: 'POST', body: JSON.stringify({ key, content }) }).then(() => toast_('已记住，Ask 时会自动参考')).catch(e => toast_('保存失败：' + e.message));
+  };
+  acts.append(saveMat, insertBody, remember);
+  card.appendChild(acts);
+}
+
+async function askFallback(promptText, ctx) {
+  const busy = addPanelCard('思考中', '…');
+  try {
+    const r = await api('/api/ai/ask', { method: 'POST', body: JSON.stringify({ prompt: promptText, context: ctx, article_id: currentAid }) });
+    busy.remove();
+    const card = addPanelCard('回答' + (r.model ? ' · ' + escapeHtml(r.model) : ''), r.reply, { model: r.model });
+    finalizeAskCard(card, r, promptText);
+  } catch (e) {
+    busy.remove();
+    addPanelCard('出错', e.message);
+  }
+}
+
 async function sendAsk() {
   const input = $('#ask-input');
   const t = input.value.trim();
@@ -723,41 +790,34 @@ async function sendAsk() {
   if (!requireCfg()) return;
   addPanelCard('你问', t, { user: true });
   input.value = '';
-  const busy = addPanelCard('思考中', '…');
+  const ctx = collectBlocks().map(b => b.text).filter(Boolean).join('\n').slice(0, 3000);
+  // 流式优先：token 逐字渲染；流不可用/网络失败 → 回退非流式
+  const replyCard = addPanelCard('回答中', '…');
+  let streamUsed = false;
+  let gotResult = null;
+  let errMsg = '';
+  const appendReply = txt => {
+    const v = replyCard.querySelector('.ins-row .v');
+    if (v.dataset.prog !== '1') { v.dataset.prog = '1'; v.textContent = ''; }
+    v.textContent += txt;
+    $('#cardflow').scrollTop = $('#cardflow').scrollHeight;
+  };
   try {
-    const ctx = collectBlocks().map(b => b.text).filter(Boolean).join('\n').slice(0, 3000);
-    const r = await api('/api/ai/ask', { method: 'POST', body: JSON.stringify({ prompt: t, context: ctx, article_id: currentAid }) });
-    busy.remove();
-    // 回答卡：显示实际模型 + 「记住偏好」入口（作者记忆，透明可删）
-    const card = addPanelCard('回答' + (r.model ? ' · ' + escapeHtml(r.model) : ''), r.reply, { model: r.model });
-    const acts = document.createElement('div');
-    acts.className = 'res-acts';
-    acts.style.marginTop = '6px';
-    // 方案 B：动作名固定——「保存为素材」「插入正文」，不出现含糊的「保存」
-    const saveMat = document.createElement('button');
-    saveMat.className = 'mini2';
-    saveMat.textContent = '保存为素材';
-    saveMat.onclick = () => saveAskAsMaterial(r, t);
-    const insertBody = document.createElement('button');
-    insertBody.className = 'mini2';
-    insertBody.textContent = '插入正文';
-    insertBody.onclick = () => insertAskToBody(r, t);
-    const remember = document.createElement('button');
-    remember.className = 'mini2';
-    remember.textContent = '记住偏好';
-    remember.title = '把这条回答里的写作偏好存进记忆（设置中可删）';
-    remember.onclick = () => {
-      const key = prompt('偏好名（如：文风）');
-      if (!key) return;
-      const content = prompt('偏好的内容（如：多用短句）');
-      if (!content) return;
-      api('/api/prefs', { method: 'POST', body: JSON.stringify({ key, content }) }).then(() => toast_('已记住，Ask 时会自动参考')).catch(e => toast_('保存失败：' + e.message));
-    };
-    acts.append(saveMat, insertBody, remember);
-    card.appendChild(acts);
-  } catch (e) {
-    busy.remove();
-    addPanelCard('出错', e.message);
+    await streamNdjson('/api/ai/ask/stream', { prompt: t, context: ctx, article_id: currentAid }, ev => {
+      streamUsed = true;
+      if (ev.type === 'token') appendReply(ev.text);
+      else if (ev.type === 'result') gotResult = ev;
+      else if (ev.type === 'error') errMsg = ev.message;
+    });
+  } catch { /* 流不可用 → 回退 */ }
+  if (gotResult) {
+    finalizeAskCard(replyCard, gotResult, t);
+  } else if (streamUsed) {
+    replyCard.remove();
+    addPanelCard('出错', errMsg || '流式回答中断，请重试');
+  } else {
+    replyCard.remove();
+    await askFallback(t, ctx);
   }
 }
 
@@ -979,6 +1039,34 @@ function anchorFor(target, selection) {
   };
 }
 
+function renderRewriteCandidates(card, candidates, target, sel) {
+  card.innerHTML = '<div class="ai-head">改写候选</div>'
+    + candidates.map(c => `<div class="opt"><span class="tag">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</div>`).join('')
+    + '<div class="acts"><button class="btn btn-g" data-x="rej">拒绝</button><button class="btn btn-p" data-x="acc">接受方案一</button></div>';
+  card.querySelector('[data-x="rej"]').onclick = () => { reportSignal('reject', { focus: 'block' }); card.remove(); };
+  card.querySelector('[data-x="acc"]').onclick = () => {
+    pushUndo(currentAid); // 可撤销点（WEN-023）
+    reportSignal('accept', { focus: 'block' });
+    const newText = candidates[0].text;
+    if (sel && sel.start_utf16 !== undefined) {
+      // 句子边界扩展：候选可能改写整个句子，避免选区在句中替换后残留拼接（dogfood Bug#3）
+      const before = target.textContent;
+      applySelectionToBlock(target, extendToSentence(target.textContent, sel), newText);
+      // 方案 D：修改可逆 + 差异可见——显示字级改动量
+      const after = target.textContent;
+      const d = charDiff(before, after);
+      if (d) toast_(`已改写：删 ${d.del} 字，增 ${d.add} 字（Ctrl+Z 可撤销）`);
+    } else {
+      target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
+      setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
+    }
+    card.remove();
+    markDirty(currentAid); // 改动标记（AI reason 保存）
+    saveNow(currentAid, 'ai_rewrite');
+    toast_('已接受（⌘Z 可撤销）');
+  };
+}
+
 async function runRewrite(target, flavor = 'default') {
   if (!requireCfg()) return;
   target = target || firstBlock();
@@ -990,38 +1078,34 @@ async function runRewrite(target, flavor = 'default') {
   card.className = 'ai-card';
   card.innerHTML = `<div class="ai-head">${flavor === 'de-ai' ? '正在去 AI 味改写…' : '正在改写…'}</div>`;
   target.after(card);
+  const body = { text: text.slice(0, 2000), flavor, ...anchorFor(target, sel) };
+  let streamUsed = false;
+  let gotResult = null;
+  let errMsg = '';
+  let acc = 0;
   try {
-    const r = await api('/api/ai/rewrite', {
-      method: 'POST',
-      body: JSON.stringify({ text: text.slice(0, 2000), flavor, ...anchorFor(target, sel) }),
+    await streamNdjson('/api/ai/rewrite/stream', body, ev => {
+      streamUsed = true;
+      if (ev.type === 'token') {
+        acc += (ev.text || '').length;
+        card.innerHTML = `<div class="ai-head">${flavor === 'de-ai' ? '正在去 AI 味改写' : '正在改写'}…（已生成 ${acc} 字）</div>`;
+      } else if (ev.type === 'result') gotResult = ev;
+      else if (ev.type === 'error') errMsg = ev.message;
     });
-    card.innerHTML = '<div class="ai-head">改写候选</div>'
-      + r.candidates.map(c => `<div class="opt"><span class="tag">${escapeHtml(c.label)}</span>${escapeHtml(c.text)}</div>`).join('')
-      + '<div class="acts"><button class="btn btn-g" data-x="rej">拒绝</button><button class="btn btn-p" data-x="acc">接受方案一</button></div>';
-    card.querySelector('[data-x="rej"]').onclick = () => { reportSignal('reject', { focus: 'block' }); card.remove(); };
-    card.querySelector('[data-x="acc"]').onclick = () => {
-      pushUndo(currentAid); // 可撤销点（WEN-023）
-      reportSignal('accept', { focus: 'block' });
-      const newText = r.candidates[0].text;
-      if (sel && sel.start_utf16 !== undefined) {
-        // 句子边界扩展：候选可能改写整个句子，避免选区在句中替换后残留拼接（dogfood Bug#3）
-        const before = target.textContent;
-        applySelectionToBlock(target, extendToSentence(target.textContent, sel), newText);
-        // 方案 D：修改可逆 + 差异可见——显示字级改动量
-        const after = target.textContent;
-        const d = charDiff(before, after);
-        if (d) toast_(`已改写：删 ${d.del} 字，增 ${d.add} 字（Ctrl+Z 可撤销）`);
-      } else {
-        target.innerHTML = `<mark class="ins">${escapeHtml(newText)}</mark>`;
-        setTimeout(() => target.querySelector('mark').classList.add('fade'), 600);
-      }
-      card.remove();
-      markDirty(currentAid); // 改动标记（AI reason 保存）
-      saveNow(currentAid, 'ai_rewrite');
-      toast_('已接受（⌘Z 可撤销）');
-    };
-  } catch (e) {
-    card.innerHTML = '<div class="ai-head">改写失败：' + escapeHtml(e.message) + '</div>';
+  } catch { /* 流不可用 → 回退非流式 */ }
+  if (gotResult) {
+    renderRewriteCandidates(card, gotResult.candidates, target, sel);
+  } else if (streamUsed) {
+    card.innerHTML = '<div class="ai-head">改写失败：' + escapeHtml(errMsg || '流中断，请重试') + '</div>';
+  } else {
+    // 回退：非流式
+    card.innerHTML = `<div class="ai-head">${flavor === 'de-ai' ? '正在去 AI 味改写…' : '正在改写…'}</div>`;
+    try {
+      const r = await api('/api/ai/rewrite', { method: 'POST', body: JSON.stringify(body) });
+      renderRewriteCandidates(card, r.candidates, target, sel);
+    } catch (e) {
+      card.innerHTML = '<div class="ai-head">改写失败：' + escapeHtml(e.message) + '</div>';
+    }
   }
 }
 $('#tool-rw').addEventListener('click', () => { reportSignal('tool_click', { tool: 'rewrite', focus: 'block' }); runRewrite(anchorFromSel()); });

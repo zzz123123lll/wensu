@@ -55,9 +55,8 @@ def model_name_for(conn, task: str) -> str:
     return s.get("model", "")
 
 
-def ask(conn, prompt: str, context: str) -> str:
-    client = _require_client(conn, task="ask")
-    messages = [
+def _ask_messages(prompt: str, context: str) -> list[dict]:
+    return [
         {
             "role": "system",
             "content": "你是写作助手「文序」，帮助作者改进文章。回答要简洁、具体、可操作，使用中文。",
@@ -67,7 +66,35 @@ def ask(conn, prompt: str, context: str) -> str:
             "content": f"当前文章上下文：\n{context}\n\n作者的问题：{prompt}",
         },
     ]
-    return client.chat(messages)
+
+
+def ask(conn, prompt: str, context: str) -> str:
+    client = _require_client(conn, task="ask")
+    return client.chat(_ask_messages(prompt, context))
+
+
+def ask_stream(conn, prompt: str, context: str, article_id: int | None = None):
+    """Ask token 流式（NDJSON 事件生成器）：token… → result{reply,model,ask_id} | error。
+
+    历史记录在 result 前落库（同一次流内完成）；失败不落库。
+    """
+    client = _require_client(conn, task="ask")
+    parts: list[str] = []
+    try:
+        for chunk in client.chat_stream(_ask_messages(prompt, context)):
+            parts.append(chunk)
+            yield {"type": "token", "text": chunk}
+        reply = "".join(parts).strip()
+        if not reply:
+            yield {"type": "error", "message": "模型未返回内容，请重试"}
+            return
+        model = model_name_for(conn, "ask")
+        ask_id = None
+        if article_id:
+            ask_id = db.record_ask(conn, article_id, prompt, reply, model)
+        yield {"type": "result", "reply": reply, "model": model, "ask_id": ask_id}
+    except LLMError as e:
+        yield {"type": "error", "message": str(e)}
 
 
 REWRITE_FLAVORS = ("default", "de-ai")
@@ -99,6 +126,28 @@ def rewrite(conn, text: str, flavor: str = "default") -> list[dict]:
     ]
     raw = client.chat(messages, json_mode=True)
     return _parse_rewrite(raw, text)
+
+
+def rewrite_stream(conn, text: str, flavor: str = "default"):
+    """改写 token 流式（NDJSON 事件生成器）：token… → result{candidates} | error。
+
+    候选解析在流结束后进行；坏 JSON 沿用 _parse_rewrite 降级链。
+    """
+    client = _require_client(conn, task="rewrite")
+    system = _REWRITE_SYSTEM_DE_AI if flavor == "de-ai" else _REWRITE_SYSTEM_DEFAULT
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": text},
+    ]
+    parts: list[str] = []
+    try:
+        for chunk in client.chat_stream(messages, json_mode=True):
+            parts.append(chunk)
+            yield {"type": "token", "text": chunk}
+        raw = "".join(parts)
+        yield {"type": "result", "candidates": _parse_rewrite(raw, text)}
+    except LLMError as e:
+        yield {"type": "error", "message": str(e)}
 
 
 def _parse_rewrite(raw: str, fallback_text: str) -> list[dict]:

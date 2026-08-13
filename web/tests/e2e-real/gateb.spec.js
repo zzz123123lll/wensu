@@ -297,7 +297,8 @@ test('E09 网络失败：本地写作可用，不生成伪引用', async ({ page
   await saveBlocks(page, aid, [{ id: 'b1', type: 'paragraph', text: '离线正文', attrs: {} }], 1);
   await page.reload();
   await openDraft(page, aid, pid);
-  // 拦截 Ask 请求模拟网络失败
+  // 拦截 Ask 请求模拟网络失败（流式与非流式双端点，前端流式优先）
+  await page.route('**/api/ai/ask/stream', route => route.abort('connectionrefused'));
   await page.route('**/api/ai/ask', route => route.abort('connectionrefused'));
   await page.fill('#ask-input', '这个问题会失败');
   await page.click('#ask-send');
