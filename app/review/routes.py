@@ -1,0 +1,177 @@
+"""review API 路由（APIRouter；不继续膨胀 app/main.py）。"""
+
+import json
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from app import db
+from app.review import pack_loader, repository, service
+
+router = APIRouter(prefix="/api", tags=["review"])
+
+
+class ReviewCreateIn(BaseModel):
+    article_id: int
+    profile_selection: dict
+
+
+class RuleOverrideIn(BaseModel):
+    patch: dict
+
+
+class ReviewIssueActionIn(BaseModel):
+    pass
+
+
+@router.get("/review/packs")
+def list_packs():
+    """列出内置/自定义规则包、版本、来源概览。"""
+    out = []
+    for pid in pack_loader.BUILTIN_PACK_IDS:
+        try:
+            pack = pack_loader.load_pack_file(pid)
+            out.append({
+                "pack_id": pack.pack_id, "pack_version": pack.pack_version,
+                "name": pack.name, "description": pack.description,
+                "rule_count": len(pack.rules), "builtin": True,
+            })
+        except Exception:
+            continue
+    conn = db.connect()
+    try:
+        customs = repository.list_custom_rules(conn)
+    finally:
+        conn.close()
+    for c in customs:
+        out.append({"pack_id": "custom", "pack_version": "user", "name": "我的规则",
+                    "description": "用户自定义规则", "rule_count": 1, "builtin": False,
+                    "custom_id": c["id"]})
+    return {"packs": out}
+
+
+@router.get("/review/rules/{rule_id}")
+def get_rule(rule_id: str):
+    """读取规则（内置定义 + 用户 override 状态）。"""
+    conn = db.connect()
+    try:
+        override = repository.get_override(conn, rule_id)
+    finally:
+        conn.close()
+    rule = None
+    for pid in pack_loader.BUILTIN_PACK_IDS:
+        try:
+            pack = pack_loader.load_pack_file(pid)
+            rule = next((r for r in pack.rules if r.id == rule_id), None)
+            if rule:
+                break
+        except Exception:
+            continue
+    if rule is None and override is None:
+        raise HTTPException(404, "规则不存在")
+    base = rule.model_dump() if rule else {}
+    return {"rule": base, "override": override}
+
+
+@router.put("/review/rules/{rule_id}")
+def put_rule_override(rule_id: str, body: RuleOverrideIn):
+    """保存用户 override（不改内置包）。"""
+    allowed = {"params", "severity", "enabled", "fix_mode"}
+    bad = set(body.patch.keys()) - allowed
+    if bad:
+        raise HTTPException(400, f"不允许覆盖字段：{sorted(bad)}")
+    conn = db.connect()
+    try:
+        repository.set_override(conn, rule_id, body.patch)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@router.post("/reviews")
+def create_review(body: ReviewCreateIn):
+    conn = db.connect()
+    try:
+        out = service.create_review(conn, body.article_id, body.profile_selection)
+    except db.NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return out
+
+
+@router.get("/reviews/{review_id}")
+def get_review(review_id: int):
+    conn = db.connect()
+    try:
+        out = service.get_review(conn, review_id)
+    except db.NotFoundError as e:
+        raise HTTPException(404, str(e))
+    finally:
+        conn.close()
+    return out
+
+
+@router.get("/reviews/{review_id}/stream")
+def stream_review(review_id: int):
+    """NDJSON：stage → issue* → done（确定性结果回放；AI 阶段 Phase 4 接入）。"""
+    def gen():
+        conn = db.connect()
+        try:
+            s = repository.get_session(conn, review_id)
+            if s is None:
+                yield json.dumps({"type": "warning", "message": "检查不存在"}, ensure_ascii=False) + "\n"
+                return
+            yield json.dumps({"type": "stage", "stage": "prepare", "status": "done"}, ensure_ascii=False) + "\n"
+            yield json.dumps({"type": "stage", "stage": "format", "status": "done"}, ensure_ascii=False) + "\n"
+            for i in repository.list_issues(conn, review_id):
+                yield json.dumps({"type": "issue", "issue": i}, ensure_ascii=False) + "\n"
+            yield json.dumps({"type": "done", "status": s["status"]}, ensure_ascii=False) + "\n"
+        finally:
+            conn.close()
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.post("/reviews/{review_id}/issues/{issue_id}/accept")
+def accept_issue(review_id: int, issue_id: int):
+    conn = db.connect()
+    try:
+        out = service.accept_issue(conn, review_id, issue_id)
+    except db.NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except db.VersionConflict as e:
+        raise HTTPException(409, f"主稿已变化（服务端 v{e.server_version}），请复检")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return out
+
+
+@router.post("/reviews/{review_id}/issues/{issue_id}/ignore")
+def ignore_issue(review_id: int, issue_id: int):
+    conn = db.connect()
+    try:
+        ok = repository.set_issue_state(conn, issue_id, "ignored")
+        if not ok:
+            raise HTTPException(404, "问题不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.post("/reviews/{review_id}/recheck")
+def recheck_review(review_id: int):
+    conn = db.connect()
+    try:
+        out = service.recheck(conn, review_id)
+    except db.NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+    return out

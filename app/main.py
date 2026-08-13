@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app import ai_service, blocks, copilot, db, safe_fetch, settings
 from app.llm import LLMError
+from app.review.routes import router as review_router
 from app.schemas import Block
 
 # 静态目录基于文件位置，而非当前工作目录（任意 CWD 可启动）
@@ -768,6 +769,8 @@ def api_export_article(aid: int):
     finally:
         conn.close()
 
+
+app.include_router(review_router)
 
 # 静态前端（必须最后挂载；基于文件位置，任意 CWD 可用）
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

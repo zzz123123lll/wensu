@@ -153,6 +153,62 @@ MIGRATIONS: list[list[str]] = [
         " task TEXT PRIMARY KEY,"
         " profile_id INTEGER NOT NULL REFERENCES model_profiles(id))",
     ],
+    # v6：成稿检查（review_sessions/issues/variant_patches/exports/规则覆盖）
+    [
+        "CREATE TABLE IF NOT EXISTS review_rule_overrides ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " rule_id TEXT NOT NULL UNIQUE,"
+        " patch_json TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS review_custom_rules ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " rule_json TEXT NOT NULL,"
+        " enabled INTEGER NOT NULL DEFAULT 1,"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS review_sessions ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " article_id INTEGER NOT NULL REFERENCES articles(id),"
+        " article_version INTEGER NOT NULL,"
+        " blocks_json TEXT NOT NULL,"
+        " citations_json TEXT NOT NULL DEFAULT '[]',"
+        " snapshot_hash TEXT NOT NULL,"
+        " profile_json TEXT NOT NULL,"
+        " status TEXT NOT NULL DEFAULT 'draft',"
+        " error TEXT NOT NULL DEFAULT '',"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS review_issues ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " review_id INTEGER NOT NULL REFERENCES review_sessions(id),"
+        " fingerprint TEXT NOT NULL,"
+        " rule_id TEXT NOT NULL,"
+        " severity TEXT NOT NULL,"
+        " anchor_json TEXT NOT NULL,"
+        " suggestion_json TEXT NOT NULL DEFAULT '{}',"
+        " reason TEXT NOT NULL DEFAULT '',"
+        " source_type TEXT NOT NULL DEFAULT 'system',"
+        " state TEXT NOT NULL DEFAULT 'open',"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS review_variant_patches ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " review_id INTEGER NOT NULL REFERENCES review_sessions(id),"
+        " target TEXT NOT NULL,"
+        " rule_id TEXT NOT NULL,"
+        " block_id TEXT NOT NULL,"
+        " selection_json TEXT NOT NULL,"
+        " original_hash TEXT NOT NULL,"
+        " replacement TEXT NOT NULL,"
+        " status TEXT NOT NULL DEFAULT 'proposed',"
+        " confirmed_at TEXT)",
+        "CREATE TABLE IF NOT EXISTS review_exports ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " review_id INTEGER NOT NULL REFERENCES review_sessions(id),"
+        " article_version INTEGER NOT NULL,"
+        " target TEXT NOT NULL,"
+        " manifest_json TEXT NOT NULL,"
+        " created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_review_issues_review ON review_issues(review_id)",
+        "CREATE INDEX IF NOT EXISTS idx_review_patches_review ON review_variant_patches(review_id)",
+    ],
 ]
 
 
