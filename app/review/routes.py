@@ -206,10 +206,15 @@ def confirm_import(body: ImportIn):
 
 
 @router.post("/reviews")
-def create_review(body: ReviewCreateIn):
+def create_review_api(body: ReviewCreateIn):
+    """创建检查 session：确定性同步 + AI 语义 + 证据同步（失败不阻塞），返回全部 issues。"""
     conn = db.connect()
     try:
         out = service.create_review(conn, body.article_id, body.profile_selection)
+        added, warns = service.run_ai_and_evidence(conn, out["review_id"])
+        issues = repository.list_issues(conn, out["review_id"])
+        return {"review_id": out["review_id"], "issues": issues, "profile": out["profile"],
+                "warnings": warns}
     except db.NotFoundError as e:
         raise HTTPException(404, str(e))
     except Exception as e:
@@ -233,11 +238,10 @@ def get_review(review_id: int):
 
 @router.get("/reviews/{review_id}/stream")
 def stream_review(review_id: int):
-    """NDJSON：stage → issue* → done。
+    """NDJSON 回放：stage（prepare/format）→ issue* → done。
 
-    阶段顺序：prepare → format（确定性，已存库回放）→ content（AI 语义）
-    → evidence（证据）→ 汇总。AI/证据失败不阻塞，产出 warning 事件；
-    取消（客户端断连）→ 已写入的 issue 保留。
+    AI 语义/证据阶段在创建时已同步执行并入库；本端点纯回放（秒回、幂等）。
+    取消（客户端断连）不影响已入库结果。
     """
 
     def gen():
@@ -251,33 +255,9 @@ def stream_review(review_id: int):
             yield json.dumps({"type": "stage", "stage": "format", "status": "done"}, ensure_ascii=False) + "\n"
             for i in repository.list_issues(conn, review_id):
                 yield json.dumps({"type": "issue", "issue": i}, ensure_ascii=False) + "\n"
-
-            # AI 语义 + 证据阶段（Phase 4）：失败不阻塞确定性结果
-            from app.review import ai_checker, aggregator, evidence_checker
-            ai_rules = [r for r in s["profile"].get("rules", []) if r.get("engine") == "ai"]
-            if ai_rules:
-                yield json.dumps({"type": "stage", "stage": "content", "status": "running"}, ensure_ascii=False) + "\n"
-                ai_issues = ai_checker.run_ai_checks(conn, s, ai_rules)
-                yield json.dumps({"type": "stage", "stage": "content", "status": "done",
-                                  "count": len(ai_issues)}, ensure_ascii=False) + "\n"
-                repository.add_issues(conn, review_id, ai_issues)
-                for i in ai_issues:
-                    yield json.dumps({"type": "issue", "issue": i}, ensure_ascii=False) + "\n"
-                if ai_checker.last_diagnostics:
-                    yield json.dumps({"type": "warning", "message": "部分 AI 检查项被丢弃（缺字段/锚点不符）",
-                                      "detail": ai_checker.last_diagnostics[-1]}, ensure_ascii=False) + "\n"
-
-            yield json.dumps({"type": "stage", "stage": "evidence", "status": "running"}, ensure_ascii=False) + "\n"
-            ev_issues = evidence_checker.run_evidence_checks(conn, s)
-            yield json.dumps({"type": "stage", "stage": "evidence", "status": "done",
-                              "count": len(ev_issues)}, ensure_ascii=False) + "\n"
-            repository.add_issues(conn, review_id, ev_issues)
-            for i in ev_issues:
-                yield json.dumps({"type": "issue", "issue": i}, ensure_ascii=False) + "\n"
-
             yield json.dumps({"type": "done", "status": s["status"]}, ensure_ascii=False) + "\n"
-        except Exception as e:  # 流式阶段失败不吞静默
-            yield json.dumps({"type": "warning", "message": f"检查阶段异常：{e}"}, ensure_ascii=False) + "\n"
+        except Exception as e:  # 回放失败不吞静默
+            yield json.dumps({"type": "warning", "message": f"回放异常：{e}"}, ensure_ascii=False) + "\n"
         finally:
             conn.close()
     return StreamingResponse(gen(), media_type="application/x-ndjson")

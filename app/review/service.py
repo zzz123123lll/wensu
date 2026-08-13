@@ -33,6 +33,37 @@ def _collect_citations(conn, article_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def run_ai_and_evidence(conn, review_id: int) -> tuple[list, list]:
+    """同步运行 AI 语义 + 证据阶段（创建检查时调用）。
+
+    - 任一阶段失败（无模型/坏输出）→ 记录诊断，不阻塞确定性结果
+    - 幂等：库中已有 ai/evidence issue（或 evidence 存在）→ 跳过模型调用
+    - 返回 (新增 issues, 诊断 warnings)
+    """
+    from app.review import ai_checker, evidence_checker
+    s = repository.get_session(conn, review_id)
+    if s is None:
+        return [], []
+    existing = repository.list_issues(conn, review_id)
+    ev_done = any(i.get("source_type") == "evidence" for i in existing)
+    ai_done = any(i.get("source_type") == "ai" for i in existing) or ev_done
+    added = []
+    warns = []
+    ai_rules = [r for r in s["profile"].get("rules", []) if r.get("engine") == "ai"]
+    if ai_rules and not ai_done:
+        ai_issues = ai_checker.run_ai_checks(conn, s, ai_rules)
+        repository.add_issues(conn, review_id, ai_issues)
+        added.extend(ai_issues)
+        if ai_checker.last_diagnostics:
+            warns.append({"stage": "content", "message": "部分 AI 检查项被丢弃（缺字段/锚点不符）",
+                          "detail": ai_checker.last_diagnostics[-1]})
+    if not ev_done:
+        ev_issues = evidence_checker.run_evidence_checks(conn, s)
+        repository.add_issues(conn, review_id, ev_issues)
+        added.extend(ev_issues)
+    return added, warns
+
+
 def create_review(conn, article_id: int, profile_selection: dict) -> dict:
     """保存未保存内容由前端负责；此处创建不可变快照 + 运行确定性检查。"""
     art = db.get_article(conn, article_id)
