@@ -33,36 +33,36 @@
 
 ## 环境要求
 
-- Windows 10+
-- Python 3.12（项目独立 venv，见下）
+- Windows 10+（安装包模式无需 Python；源码模式需 Python 3.12）
 - 任意 OpenAI 兼容模型 API（DeepSeek / OpenAI / 通义 / Kimi / 智谱 / 自定义；可多套按任务绑定）
 
-## 安装
+## 安装与启动（Windows 安装包，推荐）
+
+1. 从 GitHub Releases 下载 `Wensu-Setup-vX.Y.Z.exe`（或便携目录 `Wensu/`），安装/解压；
+2. 双击 `Wensu.exe` 或开始菜单「文序」→ 自动打开 http://127.0.0.1:8766；
+3. 右上角 ⚙ 填你自己的模型 API 地址 / 模型名 / API Key（**每个人用自己的 Key，各付各的费**）；
+4. 数据在本机 `%APPDATA%\Wensu\`（数据库/图片/每日备份），卸载不丢数据；关闭窗口即退出服务。
+
+端口被占用时自动改用 8767、8768…（窗口会显示实际地址）。
+
+## 源码安装（开发用）
 
 ```bash
 cd D:\文序项目\ai-writing-system
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
-```
-
-## 启动
-
-```bash
 wensu            # 或 python -m app.cli；任意工作目录可启动
 ```
 
-启动时自动：每日备份数据库 → 打开 http://127.0.0.1:8766（仅本机）→ 服务就绪。
-
-右上角 ⚙ 配置模型：API 地址 / 模型名 / API Key（DPAPI 加密存本地，不进网络、不进代码库）。
-高级：可添加多套模型并绑定任务（Ask / 改写 / 洞察 / 搜索 / 核验各自用不同模型）。
+启动时自动：每日备份数据库 → 打开浏览器（`--no-browser` 关闭）→ 服务就绪。
 
 ## 端口与数据
 
 | 项 | 值 |
 |----|----|
-| 服务地址 | http://127.0.0.1:8766（仅本机；Host/Origin/session 三重防护，写请求缺任一即 403） |
-| 数据库 | `data\workbench.db`（SQLite，WAL + FK，版本乐观锁；v8 迁移：Material 显式使用关系 + Revision 契约扩展 + 继续写位置） |
-| 备份 | `data\backups\workbench-YYYYMMDD.db`（每日首次启动自动） |
+| 服务地址 | http://127.0.0.1:8766（仅本机；Host/Origin/session 三重防护，写请求缺任一即 403；占用则自动 +1） |
+| 数据库 | 源码模式 `data\workbench.db`；安装包模式 `%APPDATA%\Wensu\workbench.db`（SQLite，WAL + FK，版本乐观锁） |
+| 备份 | 与数据库同目录 `backups\workbench-YYYYMMDD.db`（每日首次启动自动） |
 | Key 存储 | DPAPI 加密 BLOB；改 base_url origin 自动清 Key |
 
 ## 测试

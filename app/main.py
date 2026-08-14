@@ -58,7 +58,7 @@ def _find_web_dir() -> str:
 
 WEB_DIR = _find_web_dir()
 
-app = FastAPI(title="文序", version="0.2.0")
+app = FastAPI(title="文序", version="0.3.0")
 
 # 本机绑定服务：只允许本地源（防恶意网页跨源调用本机 API）
 # WENSU_EXTRA_HOSTS/ORIGINS：测试/多端口部署扩展（默认安全行为不变）

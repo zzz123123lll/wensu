@@ -6,22 +6,26 @@
 3. pytest --cov=app（覆盖率 < 80% 即失败）
 4. node --check 全部前端 JS
 5. Vitest + Playwright mock E2E
-6. 原子写 dist/release-manifest.json（提交哈希/测试计数/时间；pre-release 标记）
+6. 可选 --build：PyInstaller exe + 凭据扫描 + 真实 smoke + Inno Setup 安装包
+7. 原子写 dist/release-manifest.json（提交哈希/测试计数/构建信息；pre-release 标记）
 
 用法：
-    python scripts/release_gate.py [--pre-release] [--allow-dirty] [--skip-web]
+    python scripts/release_gate.py [--pre-release] [--allow-dirty] [--skip-web] [--build]
 """
 
 import argparse
 import json
 import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
 DIST = ROOT / "dist"
+with open(ROOT / "pyproject.toml", "rb") as _f:
+    VERSION = tomllib.load(_f)["project"]["version"]
 
 FAIL = "\033[91mFAIL\033[0m"
 PASS = "\033[92mPASS\033[0m"
@@ -60,6 +64,7 @@ def main():
     parser.add_argument("--pre-release", action="store_true", help="标记 pre-release（非 tag 提交）")
     parser.add_argument("--allow-dirty", action="store_true", help="工作树有改动时不失败（开发自检）")
     parser.add_argument("--skip-web", action="store_true", help="跳过前端测试（后端快速自检）")
+    parser.add_argument("--build", action="store_true", help="附加构建阶段：PyInstaller + smoke + 安装包（发布用）")
     args = parser.parse_args()
 
     results = {}
@@ -105,6 +110,42 @@ def main():
         print(f"  {PASS} Playwright mock E2E 通过")
     else:
         results["web"] = "skipped"
+
+    if args.build:
+        from scripts import build_release
+
+        step("build: PyInstaller exe + 凭据扫描")
+        build_release.build_exe()
+        forbidden = build_release.scan_forbidden_files()
+        if forbidden:
+            print(f"  {FAIL} dist 内发现禁止文件：{forbidden}")
+            sys.exit(1)
+        exe = build_release.EXE
+        if not exe.exists():
+            print(f"  {FAIL} 未找到 {exe}")
+            sys.exit(1)
+        results["exe_sha256"] = build_release.sha256(exe)
+        print(f"  {PASS} exe 构建 + 扫描通过")
+
+        step("build: smoke（临时库 + 随机端口）")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            smoke_result = build_release.smoke(exe, Path(td))
+        if not smoke_result["smoke_ok"]:
+            print(f"  {FAIL} smoke 未通过：{smoke_result['log_tail'][-500:]}")
+            sys.exit(1)
+        results["smoke"] = smoke_result
+        print(f"  {PASS} smoke OK（port {smoke_result['port']}）")
+
+        step("build: Inno Setup 安装包")
+        setup = build_release.build_installer(VERSION)
+        if setup:
+            results["installer"] = setup.name
+            results["installer_sha256"] = build_release.sha256(setup)
+            print(f"  {PASS} 安装包：{setup}")
+        else:
+            print("  WARN 未找到 iscc，跳过安装包（便携目录可用）")
 
     DIST.mkdir(exist_ok=True)
     manifest = {
