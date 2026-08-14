@@ -31,7 +31,7 @@ def _mk_citation(conn, aid, bid, sid):
 def test_material_with_tags_and_search(conn):
     pid, _ = _mk(conn)
     sid = _mk_source(conn, pid)
-    mid = db.create_material(conn, pid, "素材标题", "素材内容", sid, tags=["数据", "观点"])
+    db.create_material(conn, pid, "素材标题", "素材内容", sid, tags=["数据", "观点"])
     # 关键词搜索
     assert len(db.list_materials(conn, q="素材内容")) == 1
     assert len(db.list_materials(conn, q="不存在")) == 0

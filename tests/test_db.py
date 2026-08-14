@@ -10,6 +10,7 @@ def test_create_project_and_article():
     pid = db.create_project(conn, "随笔")
     assert pid > 0
     aid = db.create_article(conn, pid, "第一篇")
+    assert aid > 0
     assert db.list_projects(conn) == [(pid, "随笔")]
     arts = db.list_articles(conn, pid)
     assert arts[0][1] == "第一篇"

@@ -59,7 +59,9 @@ def _client(tmp_path):
     from fastapi.testclient import TestClient
     from app import main
     db.DB_PATH = str(tmp_path / "t.db")
-    conn = db.connect(); db.migrate(conn); conn.close()
+    conn = db.connect()
+    db.migrate(conn)
+    conn.close()
     return TestClient(main.app, base_url="http://127.0.0.1:8766")
 
 
@@ -72,13 +74,15 @@ def test_import_preview_then_confirm(tmp_path):
     token = body["token"]
 
     # 未确认前不安装
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     assert repository.list_custom_rules(conn) == []
     conn.close()
 
     r2 = c.post("/api/review/rules/import/confirm", json={"confirm_token": token})
     assert r2.status_code == 200
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     customs = repository.list_custom_rules(conn)
     assert len(customs) == 1 and customs[0]["rule"]["id"] == "my.rule.no-word"
     conn.close()
@@ -87,7 +91,8 @@ def test_import_preview_then_confirm(tmp_path):
 def test_import_without_confirm_does_not_install(tmp_path):
     c = _client(tmp_path)
     c.post("/api/review/rules/import", json={"content": json.dumps({"rules": [_rule()]})})
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     assert repository.list_custom_rules(conn) == []
     conn.close()
 

@@ -158,7 +158,8 @@ def test_api_review_flow(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from app import main
     db.DB_PATH = str(tmp_path / "t.db")
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     aid = _art_with_issues(conn)
     conn.close()
     c = TestClient(main.app, base_url="http://127.0.0.1:8766")
@@ -217,7 +218,8 @@ def test_api_export_general_vs_channel_isolated(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from app import main
     db.DB_PATH = str(tmp_path / "t.db")
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     _add_wechat_rule(conn)
     blocks = [{"id": "b1", "type": "paragraph", "text": "这句话需要渠道化", "attrs": {}}]
     aid = _mk_article(conn, blocks)
@@ -260,7 +262,8 @@ def test_api_export_stale_patch_flagged(tmp_path):
     from fastapi.testclient import TestClient
     from app import main
     db.DB_PATH = str(tmp_path / "t.db")
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     _add_wechat_rule(conn)
     blocks = [{"id": "b1", "type": "paragraph", "text": "原始句子内容", "attrs": {}}]
     aid = _mk_article(conn, blocks)

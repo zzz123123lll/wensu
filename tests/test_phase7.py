@@ -38,7 +38,8 @@ def test_ask_context_injects_history_and_prefs(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from app import main
     db.DB_PATH = str(tmp_path / "t.db")
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     pid = db.create_project(conn, "p")
     aid = db.create_article(conn, pid, "t")
     db.record_ask(conn, aid, "上一问", "上一答", "m")
@@ -59,7 +60,8 @@ def test_ask_context_injects_history_and_prefs(tmp_path, monkeypatch):
     assert "简洁" in captured["ctx"]
     assert "上一问" in captured["ctx"]        # 历史注入
     # 历史已记录（新问题入库）
-    conn = db.connect(); db.migrate(conn)
+    conn = db.connect()
+    db.migrate(conn)
     assert db.list_asks(conn, aid, 10)[0]["prompt"] == "新问题"
     conn.close()
 

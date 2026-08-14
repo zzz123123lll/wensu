@@ -1,6 +1,5 @@
 """Phase 4 测试：AI 语义检查 / 证据检查 / 聚合去重冲突。mock LLM，不碰真实网络。"""
 
-import pytest
 
 from app.review import aggregator, ai_checker, evidence_checker
 

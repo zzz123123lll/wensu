@@ -3,7 +3,6 @@
 全部使用临时/内存数据库，不触碰 data/workbench.db。
 """
 
-import sqlite3
 
 import pytest
 
@@ -93,7 +92,7 @@ def test_upgrade_from_v5_and_v7(tmp_path):
             cid = db.create_citation(conn, aid, "b1", sid, quote="引")
             if target >= 7:  # metadata_json 列 v7 才加
                 db.set_citation_verification(conn, cid, "supported")
-                mid = db.create_material(conn, pid, "素材", "内容", sid)
+                db.create_material(conn, pid, "素材", "内容", sid)
         conn.close()
         # 升级到最新
         conn = db.connect(path)

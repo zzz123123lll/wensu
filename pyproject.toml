@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
+    "pytest-cov==7.1.0",
     "ruff>=0.6.0",
 ]
 
@@ -35,6 +36,13 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 80
+skip_covered = true
 
 [tool.ruff.lint]
 # 门禁：核心正确性规则（未定义名称/未使用导入/语法级问题）；风格规则不强制

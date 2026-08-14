@@ -1,6 +1,5 @@
 """safe_fetch 测试：SSRF 防护 / scheme / 重定向 / 大小上限（不真联网）。"""
 
-import io
 import urllib.error
 import urllib.request
 

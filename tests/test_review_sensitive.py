@@ -7,7 +7,7 @@ import pytest
 
 from app import db
 from app.review import deterministic, sensitive_words
-from app.review import repository, service
+from app.review import service
 
 
 # ---------- 词库加载 ----------

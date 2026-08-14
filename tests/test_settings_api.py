@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app import db, main, settings
+from app import db, main
 
 
 def _client(tmp_path):

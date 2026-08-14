@@ -1,8 +1,7 @@
 """review resolver 测试：四层合并、优先级、同层冲突、个人覆盖、自定义规则。"""
 
-import pytest
 
-from app.review import models, resolver
+from app.review import resolver
 
 
 def _pack_sel(common=("common-markdown",), type_=("opinion-essay",), channel=(), personal=()):

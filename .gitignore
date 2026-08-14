@@ -19,6 +19,11 @@ prototype/api_config.json
 node_modules/
 web/test-results/
 web/playwright-report/
+web/e2e-tmp/
+
+# 覆盖率与产物
+.coverage
+dist/
 
 # 杂项
 *.log

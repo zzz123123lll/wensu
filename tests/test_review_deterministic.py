@@ -1,8 +1,7 @@
 """review 确定性检查器测试：同一快照同规则 → 相同 Issue（纯函数）。"""
 
-import pytest
 
-from app.review import deterministic, models
+from app.review import deterministic
 
 
 def _snapshot(blocks, citations=None):

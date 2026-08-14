@@ -82,7 +82,7 @@ def test_p06_unlink_only_keeps_material(client):
     # 建正文 + citation（模拟素材正文已被引用）
     conn = main._conn()
     db.save_article(conn, aids[0], blocks=[{"id": "b1", "type": "paragraph", "text": "正文", "attrs": {}}], base_version=1)
-    cid = db.create_citation(conn, aids[0], "b1", sid, quote="引")
+    db.create_citation(conn, aids[0], "b1", sid, quote="引")
     conn.close()
     r = auth(client, "DELETE", f"/api/materials/{mids[0]}?unlink_only=1")
     assert r.status_code == 200

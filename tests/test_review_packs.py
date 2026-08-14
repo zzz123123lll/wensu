@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.review import models, pack_loader
+from app.review import pack_loader
 
 
 @pytest.mark.parametrize("pid", pack_loader.BUILTIN_PACK_IDS)

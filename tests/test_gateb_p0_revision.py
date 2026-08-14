@@ -172,7 +172,6 @@ def test_p04_version_conflict_no_partial(client):
     pid, aid, mid = _mk(client)
     r = _put(client, aid, [{"id": "b1", "type": "paragraph", "text": "服务端已有", "attrs": {}}],
              1, "autosave")
-    server_ver = r.json()["version"]
     # 客户端基于过期 base_version=1 再插一次 → 冲突
     r = _put(client, aid, [{"id": "b1", "type": "paragraph", "text": "客户端插入", "attrs": {}}],
              1, "material_insert", source_object_type="material", source_object_id=str(mid))
