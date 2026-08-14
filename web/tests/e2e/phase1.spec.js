@@ -38,10 +38,9 @@ test('素材库：打开/搜索/插入正文', async ({ page }) => {
   // 搜索
   await page.fill('#mat-q', '市场规模');
   await expect(page.locator('.mat-item')).toContainText('AI 市场规模数据');
-  // 插入正文
+  // 插入正文（异步：先取素材详情再写 DOM，用自动等待断言防时序竞态）
   await page.click('.mat-item [data-x="insert"]');
-  const text = await page.evaluate(() => document.querySelector('#article .blk.edit').textContent);
-  expect(text).toContain('2000 亿美元');
+  await expect(page.locator('#article .blk.edit').first()).toContainText('2000 亿美元', { timeout: 5000 });
 });
 
 test('引用清单：核验状态/定位/移除', async ({ page }) => {
