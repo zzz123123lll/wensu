@@ -27,6 +27,13 @@ DIST = ROOT / "dist"
 with open(ROOT / "pyproject.toml", "rb") as _f:
     VERSION = tomllib.load(_f)["project"]["version"]
 
+# CI/管道环境 stdout 可能不是 UTF-8（cp1252），打印中文会 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 FAIL = "\033[91mFAIL\033[0m"
 PASS = "\033[92mPASS\033[0m"
 

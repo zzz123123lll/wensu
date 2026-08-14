@@ -21,6 +21,13 @@ DIST = ROOT / "dist"
 EXE = DIST / "Wensu" / "Wensu.exe"
 FORBIDDEN_NAMES = {".env", "settings.json", "credentials.bin", "api_config.json"}
 
+# 管道环境 stdout 可能不是 UTF-8（cp1252），打印中文会 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 def _run(cmd, cwd=None):
     subprocess.run(cmd, cwd=cwd or ROOT, check=True)
