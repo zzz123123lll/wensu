@@ -81,13 +81,11 @@ def test_diagnostics_no_secrets():
 
 def test_daily_backup_creates_and_skips_same_day(tmp_path, monkeypatch):
     from app import cli
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "workbench.db").write_bytes(b"DB-BYTES")
-    (tmp_path / "app").mkdir()
-    monkeypatch.setattr(cli, "__file__", str(tmp_path / "app" / "cli.py"))
-    dest = cli._daily_backup()
+    db_file = tmp_path / "workbench.db"
+    db_file.write_bytes(b"DB-BYTES")
+    dest = cli.backup_db(str(db_file))
     assert dest and os.path.exists(dest)
     with open(dest, "rb") as f:
         assert f.read() == b"DB-BYTES"
     # 同日再次启动 → 跳过（不重复备份）
-    assert cli._daily_backup() is None
+    assert cli.backup_db(str(db_file)) is None
