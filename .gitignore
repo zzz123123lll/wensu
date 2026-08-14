@@ -34,3 +34,4 @@ build/
 # Hermes 工作文件
 .gstack/
 .hermes/
+data/ppt-shots/
