@@ -3,6 +3,7 @@
 import json
 import os
 import secrets
+import sys
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
@@ -20,11 +21,15 @@ from app.llm import LLMClient, LLMError
 from app.review.routes import router as review_router
 from app.schemas import Block
 
-# 图片上传：本地存储目录（data/uploads，gitignore）；类型白名单 + 大小上限
-UPLOADS_DIR = os.environ.get(
-    "WENSU_UPLOADS_DIR",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads"),
-)
+# 图片上传：本地存储目录；冻结模式放 %APPDATA%\Wensu\uploads（安装目录不可写）
+def _default_uploads_dir() -> str:
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "Wensu", "uploads")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads")
+
+
+UPLOADS_DIR = os.environ.get("WENSU_UPLOADS_DIR", _default_uploads_dir())
 UPLOAD_MAX_BYTES = 5 * 1024 * 1024  # 5MB
 _UPLOAD_MIME_EXT = {
     "image/png": ".png",

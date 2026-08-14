@@ -10,15 +10,26 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 
 from app.settings import _decrypt as settings_decrypt
 
 # 默认数据库路径（基于文件位置，任意 CWD 可启动；WENSU_DB 环境变量可覆盖——测试隔离用）
-DB_PATH = os.environ.get(
-    "WENSU_DB",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "workbench.db"),
-)
+# 冻结（PyInstaller 打包）模式：用户数据放 %APPDATA%\Wensu（安装目录不可写，卸载不丢数据）
+def _default_db_dir() -> str:
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "Wensu")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+
+def resolve_db_path(env: dict | None = None) -> str:
+    env = os.environ if env is None else env
+    return env.get("WENSU_DB") or os.path.join(_default_db_dir(), "workbench.db")
+
+
+DB_PATH = resolve_db_path()
 
 # 受控 Revision 原因（P0-4 统一契约）：AI 接受/核验/冲突恢复/素材插入/Ask 插入/版本恢复。
 # 普通 autosave 不制造历史记录（v0.2 无历史 UI）。
