@@ -20,6 +20,40 @@ let insightAbort = null; // 洞察请求取消句柄
 async function loadProjects() {
   projects = await api('/api/projects');
   renderSide();
+  renderOnboarding();
+}
+
+/* ========== 新手引导（轻量）：起始页三步起步卡 ========== */
+async function renderOnboarding() {
+  const box = $('#onboard');
+  if (!box) return;
+  if (localStorage.getItem('wensu-onboard-closed') === '1') { box.innerHTML = ''; return; }
+  let configured = false;
+  try { const s = await api('/api/settings'); configured = !!s.configured; } catch { /* 未配置按未完成处理 */ }
+  const hasDrafts = localStorage.getItem('wensu-has-drafts') === '1';
+  const selUsed = localStorage.getItem('wensu-sel-used') === '1';
+  const steps = [
+    { done: configured, act: 'cfg', label: '配置你的模型', desc: '右上角 ⚙ 填你的 API Key（DeepSeek / OpenAI / 通义 / Kimi 都行）' },
+    { done: hasDrafts, act: 'new', label: '新建一篇草稿', desc: '左侧点任意项目旁的「＋ 新建草稿」，然后开始写' },
+    { done: selUsed, act: 'sel', label: '选中文字召唤 AI', desc: '在正文里选中一段文字，头顶会浮出工具条：改写 / 去AI味 / 搜索 / 核验' },
+  ];
+  box.innerHTML = `<div class="ob-card">
+    <div class="ob-head">三分钟上手 <button class="ob-close" title="不再显示">×</button></div>
+    ${steps.map((s, i) => `<div class="ob-step ${s.done ? 'done' : ''}" data-act="${s.act}">
+      <span class="ob-ic">${s.done ? '✓' : i + 1}</span>
+      <div><div class="ob-t">${s.label}</div><div class="ob-d">${s.desc}</div></div>
+    </div>`).join('')}
+  </div>`;
+  box.querySelector('.ob-close').onclick = () => {
+    localStorage.setItem('wensu-onboard-closed', '1');
+    box.innerHTML = '';
+  };
+  const cfgStep = box.querySelector('[data-act="cfg"]');
+  if (cfgStep) cfgStep.onclick = () => openSettings();
+  const newStep = box.querySelector('[data-act="new"]');
+  if (newStep) newStep.onclick = () => toast_('点左侧任意项目旁的「＋ 新建草稿」开始写');
+  const selStep = box.querySelector('[data-act="sel"]');
+  if (selStep) selStep.onclick = () => toast_('打开一篇草稿，用鼠标选中一段文字试试');
 }
 
 function renderSide() {
@@ -53,6 +87,7 @@ function renderSide() {
     inlineName('草稿标题', async name => {
       const pid = +row.dataset.pid;
       const created = await api(`/api/projects/${pid}/articles`, { method: 'POST', body: JSON.stringify({ title: name }) });
+      localStorage.setItem('wensu-has-drafts', '1');
       await loadArticles(pid);
       openArticle(created.id); // 新建即打开
       toast_('已新建草稿「' + name + '」');
@@ -127,7 +162,7 @@ function openArticle(aid) {
 
     let html = `<div class="art-title">${escapeHtml(a.title)}</div>`;
     html += `<div class="art-meta">草稿 · <span id="save-status" class="save-status"></span>
-      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-review">成稿检查</button><button class="mini2" id="btn-title">标题评分</button><button class="mini2" id="btn-export">导出</button></span></div>`;
+      <span class="meta-ops"><button class="mini2" id="btn-history">历史</button><button class="mini2" id="btn-review">成稿检查</button><button class="mini2" id="btn-title">标题评分</button><button class="mini2" id="btn-publish">发布</button><button class="mini2" id="btn-export">导出</button></span></div>`;
     if (a.blocks.length === 0) {
       html += `<div class="blk edit empty" contenteditable="true" data-bid="${crypto.randomUUID()}"></div>`;
     } else {
@@ -151,6 +186,8 @@ function openArticle(aid) {
     });
     const bt = $('#btn-title');
     if (bt) bt.addEventListener('click', () => runTitleScore(aid));
+    const bp = $('#btn-publish');
+    if (bp) bp.addEventListener('click', () => openPublish(aid));
     // 高亮左栏当前草稿
     document.querySelectorAll('.doc[data-aid]').forEach(d => d.classList.toggle('active', +d.dataset.aid === aid));
     restoreEditorPosition(aid); // P1-5：恢复上次位置（不强制 scrollTop=0）
@@ -473,6 +510,7 @@ function openSettings() {
   }
   document.querySelectorAll('.preset').forEach(b => b.classList.toggle('on', b.dataset.p === matched));
   $('#settings-modal').style.display = 'flex';
+  loadPublishTargets();
 }
 
 document.querySelectorAll('.preset').forEach(btn => btn.addEventListener('click', () => {
@@ -995,6 +1033,7 @@ function initSelbar() {
     e.preventDefault(); // 保持选区不因点击而丢失
     const t = b.dataset.t;
     reportSignal('selbar_click', { tool: t, focus: 'selection' });
+    localStorage.setItem('wensu-sel-used', '1');
     const target = anchorFromSel();
     if (t === 'rewrite') runRewrite(target);
     else if (t === 'deai') runRewrite(target, 'de-ai');
@@ -1230,6 +1269,123 @@ async function runTitleScore(aid) {
     card.innerHTML = '<div class="ai-head">标题评分失败：' + escapeHtml(e.message) + '</div>';
   }
 }
+
+/* ========== 使用技巧（轻量引导） ========== */
+const TIPS = [
+  '选中任何文字 → 头顶浮出工具条：改写 / 去AI味 / 搜索 / 核验',
+  'Ask 的回答可以「插入正文」或「保存为素材」',
+  'Ctrl+Z 撤销改动；右上角「历史」找回任意版本',
+  '发稿前点「成稿检查」：格式、语言、事实、引用、敏感词逐项挑错',
+  '素材库支持粘贴网址一键剪藏',
+  '「导出」含 Markdown / Word / 公众号 HTML / 项目 ZIP',
+];
+$('#btn-tips').addEventListener('click', () => {
+  document.querySelectorAll('.ai-card.tips-card').forEach(c => c.remove());
+  const card = document.createElement('div');
+  card.className = 'ai-card tips-card';
+  card.innerHTML = '<div class="ai-head">使用技巧</div>'
+    + TIPS.map(t => `<div class="opt">· ${t}</div>`).join('')
+    + '<div class="acts"><button class="btn btn-g" data-x="cls">收起</button></div>';
+  $('#cardflow').prepend(card);
+  card.querySelector('[data-x="cls"]').onclick = () => card.remove();
+});
+
+/* ========== 通用发布（webhook / 本地目录 / 剪贴板） ========== */
+async function openPublish(aid) {
+  document.querySelectorAll('.ai-card.publish-card').forEach(c => c.remove());
+  const card = document.createElement('div');
+  card.className = 'ai-card publish-card';
+  card.innerHTML = `<div class="ai-head">发布</div>
+    <div class="pb-row">
+      <select id="pb-target"></select>
+      <select id="pb-fmt">
+        <option value="markdown">Markdown</option>
+        <option value="html">HTML（公众号样式）</option>
+        <option value="plain">纯文本</option>
+      </select>
+    </div>
+    <div class="acts">
+      <button class="btn btn-g" id="pb-copy">复制 HTML 到剪贴板</button>
+      <button class="btn btn-p" id="pb-go">发布</button>
+    </div>
+    <div id="pb-logs"></div>`;
+  $('#cardflow').prepend(card);
+  const sel = $('#pb-target');
+  try {
+    const r = await api('/api/publish-targets');
+    sel.innerHTML = r.targets.length
+      ? r.targets.map(t => `<option value="${t.id}">${escapeHtml(t.name)} · ${escapeHtml(t.summary)}</option>`).join('')
+      : '<option value="">还没有发布目标——去右上角 ⚙ 设置里添加</option>';
+  } catch { sel.innerHTML = '<option value="">目标加载失败</option>'; }
+  loadPublishLogs(card);
+  card.querySelector('#pb-copy').onclick = async () => {
+    try {
+      const resp = await fetch(`/api/articles/${aid}/export?format=wechat`);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      await navigator.clipboard.writeText(await resp.text());
+      toast_('已复制 HTML，去目标平台粘贴即可');
+    } catch (e) { toast_('复制失败：' + e.message); }
+  };
+  card.querySelector('#pb-go').onclick = async () => {
+    const target_id = +sel.value;
+    if (!target_id) { toast_('先在设置里添加发布目标'); return; }
+    try {
+      const r = await api(`/api/articles/${aid}/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ target_id, fmt: $('#pb-fmt').value }),
+      });
+      toast_(r.status === 'ok' ? '发布成功：' + r.message : '发布失败：' + r.message);
+      loadPublishLogs(card);
+    } catch (e) { toast_('发布失败：' + e.message); }
+  };
+}
+
+async function loadPublishLogs(card) {
+  const box = card.querySelector('#pb-logs');
+  try {
+    const r = await api('/api/publish-logs');
+    box.innerHTML = r.logs.length
+      ? '<div class="opt">最近发布</div>' + r.logs.map(l =>
+        `<div class="opt">${l.status === 'ok' ? '✓' : '✗'} ${escapeHtml(l.target_name || '?')} · ${escapeHtml(l.fmt)} · ${escapeHtml((l.message || '').slice(0, 60))}</div>`).join('')
+      : '';
+  } catch { box.innerHTML = ''; }
+}
+
+/* ========== 发布目标管理（设置内） ========== */
+async function loadPublishTargets() {
+  const list = $('#pub-targets-list');
+  if (!list) return;
+  try {
+    const r = await api('/api/publish-targets');
+    list.innerHTML = r.targets.length
+      ? r.targets.map(t => `<div class="pref-row"><span>${escapeHtml(t.name)}</span><span class="hint">${escapeHtml(t.summary)}</span>
+        <button class="mini2" data-x="del" data-id="${t.id}">删除</button></div>`).join('')
+      : '<div class="modal-hint">还没有发布目标。Webhook 可对接飞书/自建服务等；本地目录用于一键导出。</div>';
+    list.querySelectorAll('[data-x="del"]').forEach(b => b.onclick = async () => {
+      try {
+        await api(`/api/publish-targets/${b.dataset.id}`, { method: 'DELETE' });
+        loadPublishTargets();
+      } catch (e) { toast_('删除失败：' + e.message); }
+    });
+  } catch { list.innerHTML = '<div class="modal-hint">加载失败</div>'; }
+}
+
+$('#pt-add-btn').addEventListener('click', async () => {
+  const name = $('#pt-name').value.trim();
+  const kind = $('#pt-kind').value;
+  const cfg = $('#pt-cfg').value.trim();
+  if (!name || !cfg) { toast_('名称和地址/目录都要填'); return; }
+  try {
+    await api('/api/publish-targets', {
+      method: 'POST',
+      body: JSON.stringify({ name, kind, config: kind === 'webhook' ? { url: cfg } : { dir: cfg } }),
+    });
+    $('#pt-name').value = '';
+    $('#pt-cfg').value = '';
+    loadPublishTargets();
+    toast_('已添加发布目标');
+  } catch (e) { toast_('添加失败：' + e.message); }
+});
 $('#ask-send').addEventListener('click', () => { reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 $('#ask-input').addEventListener('keydown', e => { if (e.key === 'Enter') reportSignal('tool_click', { tool: 'ask', focus: 'article' }); });
 $('#ask-history-btn').addEventListener('click', showAskHistory);

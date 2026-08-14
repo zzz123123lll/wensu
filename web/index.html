@@ -55,6 +55,7 @@
           <div id="empty">
             <h1>今天想写点什么？</h1>
             <p>从左侧选择一篇草稿继续，或新建一篇。</p>
+            <div id="onboard"></div>
           </div>
           <div id="article"></div>
         </div>
@@ -67,7 +68,8 @@
         <div id="panel-head">
           <span class="pt">写作助手</span>
           <span class="pstatus" id="pstatus"><span class="pdot"></span><span id="pstatus-text">草稿</span></span>
-          <button id="btn-cites" class="mini2" title="当前草稿的引用清单" style="margin-left:auto">引用</button>
+          <button id="btn-tips" class="mini2" title="使用技巧" style="margin-left:auto">技巧</button>
+          <button id="btn-cites" class="mini2" title="当前草稿的引用清单">引用</button>
         </div>
         <div id="cardflow">
           <div class="insight">
@@ -159,6 +161,15 @@
     <div class="sec-title">检查规则（成稿检查用；导入需预览确认）</div>
     <div id="rules-list"></div>
     <div class="pref-add"><button id="rules-import-btn" class="mini2">导入规则文件…</button></div>
+    <div class="sec-divider"></div>
+    <div class="sec-title">发布目标（Webhook / 本地目录；配置加密存本机）</div>
+    <div id="pub-targets-list"></div>
+    <div class="pref-add">
+      <input id="pt-name" placeholder="名称，如：飞书群" maxlength="30">
+      <select id="pt-kind"><option value="webhook">Webhook</option><option value="local">本地目录</option></select>
+      <input id="pt-cfg" placeholder="Webhook 地址 或 本地目录路径" style="width:200px">
+      <button id="pt-add-btn" class="mini2">添加</button>
+    </div>
     <div class="modal-acts">
       <button class="btn btn-g" id="modal-cancel">取消</button>
       <button class="btn btn-p" id="modal-save">保存</button>

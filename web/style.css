@@ -123,6 +123,30 @@ body {
 #selbar .selbar-btn { border: 0; background: transparent; color: #fff; font-size: 12.5px;
   padding: 6px 10px; border-radius: 7px; cursor: pointer; line-height: 1; }
 #selbar .selbar-btn:hover { background: rgba(255,255,255,0.16); }
+
+/* 新手引导卡（起始页） */
+.ob-card { margin: 26px auto 0; max-width: 520px; text-align: left; background: #fff;
+  border: 1px solid rgba(0,0,0,0.07); border-radius: 14px; padding: 18px 20px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
+.ob-head { display: flex; justify-content: space-between; align-items: center;
+  font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+.ob-close { border: 0; background: transparent; font-size: 16px; color: var(--fg-3); cursor: pointer; }
+.ob-step { display: flex; gap: 10px; align-items: flex-start; padding: 8px 6px;
+  border-radius: 8px; cursor: pointer; }
+.ob-step:hover { background: var(--accent-soft); }
+.ob-step.done { opacity: 0.55; cursor: default; }
+.ob-ic { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent);
+  color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.ob-step.done .ob-ic { background: #34c759; }
+.ob-t { font-size: 13.5px; font-weight: 600; }
+.ob-d { font-size: 12px; color: var(--fg-3); margin-top: 1px; }
+
+/* 发布面板 */
+.pb-row { display: flex; gap: 6px; margin: 8px 0; }
+.pb-row select { flex: 1; }
+#pb-logs { margin-top: 6px; }
+.pref-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0; }
+.pref-row .hint { color: var(--fg-3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-flash { animation: rvflash 1.6s ease; border-radius: 6px; }
 @keyframes rvflash { 0% { background: rgba(0,113,227,0.18); } 100% { background: transparent; } }
 .rv-foot { margin-top: 8px; }
