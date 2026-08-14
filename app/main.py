@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from app import ai_service, copilot, db, safe_fetch, settings
+from app import ai_service, copilot, db, publish, safe_fetch, settings
 from app.domains import exports as export_service
 from app.llm import LLMClient, LLMError
 from app.review.routes import router as review_router
@@ -220,6 +220,17 @@ class SourceIn(BaseModel):
 
 class ClipIn(BaseModel):
     url: str
+
+
+class PublishTargetIn(BaseModel):
+    name: str
+    kind: str
+    config: dict
+
+
+class PublishIn(BaseModel):
+    target_id: int
+    fmt: str = "markdown"
 
 
 # 标签上限：数量与单个长度（P0-2 统一边界校验）
@@ -1263,6 +1274,72 @@ def api_clip(pid: int, body: ClipIn):
                                title=title, snippet=excerpt[:500], provider="clip")
         mid = db.create_material(conn, pid, title, excerpt[:5000], sid, tags=["剪藏"])
         return {"material_id": mid, "source_id": sid, "title": title, "chars": len(excerpt)}
+    finally:
+        conn.close()
+
+
+# ---------- 通用发布（三件套：webhook / 本地目录 / 剪贴板前端处理） ----------
+
+@app.get("/api/publish-targets")
+def api_list_publish_targets():
+    conn = _conn()
+    try:
+        return {"targets": publish.list_targets_public(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/publish-targets")
+def api_create_publish_target(body: PublishTargetIn):
+    name = body.name.strip()
+    if not name or len(name) > 50:
+        raise HTTPException(400, "目标名不能为空且不超过 50 字")
+    conn = _conn()
+    try:
+        try:
+            cfg = publish.validate_target(body.kind, body.config)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        try:
+            tid = db.create_publish_target(conn, name, body.kind, publish._encrypt_config(cfg))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"id": tid}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/publish-targets/{tid}")
+def api_delete_publish_target(tid: int):
+    conn = _conn()
+    try:
+        if db.get_publish_target(conn, tid) is None:
+            raise HTTPException(404, "发布目标不存在")
+        db.delete_publish_target(conn, tid)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/api/articles/{aid}/publish")
+def api_publish_article(aid: int, body: PublishIn):
+    if body.fmt not in publish.ALLOWED_FORMATS:
+        raise HTTPException(400, f"不支持的发布格式：{body.fmt}")
+    conn = _conn()
+    try:
+        try:
+            return publish.publish_article(conn, aid, body.target_id, body.fmt)
+        except publish.PublishError as e:
+            raise HTTPException(400, str(e))
+    finally:
+        conn.close()
+
+
+@app.get("/api/publish-logs")
+def api_publish_logs():
+    conn = _conn()
+    try:
+        return {"logs": db.list_publish_logs(conn, 20)}
     finally:
         conn.close()
 

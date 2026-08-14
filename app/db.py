@@ -264,6 +264,24 @@ MIGRATIONS: list[list[str]] = [
         # P1-5：继续写位置（本地写作状态；不进模型上下文，不随正文保存）
         "ALTER TABLE articles ADD COLUMN editor_state_json TEXT NOT NULL DEFAULT '{}'",
     ],
+    # v9（发布三件套）：publish_targets（配置 DPAPI 加密落盘）+ publish_logs（发布历史，诚实记录）
+    [
+        "CREATE TABLE IF NOT EXISTS publish_targets ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " name TEXT NOT NULL UNIQUE,"
+        " kind TEXT NOT NULL CHECK (kind IN ('webhook','local')),"
+        " config_enc BLOB NOT NULL,"
+        " enabled INTEGER NOT NULL DEFAULT 1,"
+        " created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS publish_logs ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " article_id INTEGER,"
+        " target_id INTEGER,"
+        " fmt TEXT NOT NULL,"
+        " status TEXT NOT NULL,"
+        " message TEXT NOT NULL DEFAULT '',"
+        " created_at TEXT NOT NULL)",
+    ],
 ]
 
 
@@ -1088,3 +1106,50 @@ def get_profile_key(conn, pid: int) -> str:
     if not row or not row["api_key_enc"]:
         return ""
     return settings_decrypt(bytes(row["api_key_enc"]))
+
+
+# ---------- 发布目标与日志（v9） ----------
+
+def create_publish_target(conn, name: str, kind: str, config_enc: bytes) -> int:
+    """创建发布目标；重名抛 ValueError（先查后插，API 可映射 400）。"""
+    dup = conn.execute("SELECT id FROM publish_targets WHERE name = ?", (name,)).fetchone()
+    if dup:
+        raise ValueError(f"目标名已存在：{name}")
+    cur = conn.execute(
+        "INSERT INTO publish_targets (name, kind, config_enc, created_at) VALUES (?, ?, ?, ?)",
+        (name, kind, config_enc, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_publish_targets(conn) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM publish_targets ORDER BY id").fetchall()]
+
+
+def get_publish_target(conn, tid: int) -> dict | None:
+    row = conn.execute("SELECT * FROM publish_targets WHERE id = ?", (tid,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_publish_target(conn, tid: int) -> None:
+    conn.execute("DELETE FROM publish_targets WHERE id = ?", (tid,))
+    conn.commit()
+
+
+def record_publish_log(conn, article_id: int | None, target_id: int | None,
+                       fmt: str, status: str, message: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO publish_logs (article_id, target_id, fmt, status, message, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (article_id, target_id, fmt, status, message, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_publish_logs(conn, limit: int = 20) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT l.*, t.name AS target_name FROM publish_logs l"
+        " LEFT JOIN publish_targets t ON t.id = l.target_id"
+        " ORDER BY l.id DESC LIMIT ?", (limit,)).fetchall()]

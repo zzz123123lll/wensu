@@ -156,7 +156,8 @@ def test_migrate_failure_keeps_article_intact(tmp_path):
     finally:
         db.MIGRATIONS = orig
     conn3 = db.connect(path)
-    n = conn3.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version > 8").fetchone()["n"]
+    n = conn3.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version > ?",
+                      (len(db.MIGRATIONS),)).fetchone()["n"]
     assert n == 0  # 失败版本未记录
     conn3.close()
     art = db.get_article(conn, aid)
