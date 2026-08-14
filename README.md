@@ -1,122 +1,101 @@
-# 文序 · AI 原生写作系统
+# 文序 Wensu · AI 原生写作系统
 
-作品是中心，人是作者，AI 是围绕作品工作的智能层。
+**作品是中心，人是作者，AI 是参谋。**
 
-当前状态：实施计划 v0.2 全量完成 + Gate B（可发布闭环版）修复——真存储、真模型、
-五条 AI 链路（Ask / 改写 / 洞察 / 搜索 / 核验）、证据引用、规则智能建议、作者记忆、
-多模型绑定、回收站/历史/导出、自动备份与安全收口。
+一个跑在你自己电脑上的 AI 写作工作台：写 3000 字观点长文，边查资料边写，成稿后逐项检查，导出干净的 Markdown。**你填自己的 API Key，花自己的钱，数据不出自己的电脑。**
 
-## 主要能力
+[![CI](https://github.com/zzz123123lll/wensu/actions/workflows/ci.yml/badge.svg)](https://github.com/zzz123123lll/wensu/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/Release-v0.3.0-0071e3)](https://github.com/zzz123123lll/wensu/releases/tag/v0.3.0)
+Windows 10+ · 本地单机 · 自带 Key（BYOK） · 无云 · 无账号 · 不上传
 
-- **写作**：Block 式编辑（H1-H4/列表/代码/图片/分隔线完整往返，不降级 paragraph）、
-  自动保存状态机、中文 IME、粘贴白名单、撤销栈、版本历史、回收站、
-  统一导出（Markdown / 纯文本 / Word，含引用清单与来源附录）
-- **证据链**：来源 → 素材（显式使用关系，不靠共享来源推断）→ 正文主张 → 引用 →
-  核验（六态受控）→ 正文变化自动失效复查 → 安全删除/解除关系
-- **Revision 管道**：素材插入 / Ask 插入 / AI 改写 / 核验修订 / 冲突恢复 / 版本恢复
-  统一记录 before/after 快照，可从版本历史恢复或撤销单次修改
-- **继续写**：上次编辑位置（块 + 光标 + 滚动）、最近素材、待处理检查、待复查引用、
-  一句可解释的下一步；位置属本地写作状态，不进模型上下文
-- **AI 五链路**：Ask（偏好+历史上下文，**token 流式**）/ 改写（段下候选，**流式+进度**，**去AI味 flavor**）/
-  洞察（手动触发）/ 搜索（NDJSON 流式+缓存，**维基+DDG+中文多引擎 Bing/360/搜狗/百度 并发合并**）/ 核验（证据型）
-- **成稿检查**：规则包四层 Profile → 确定性检查（含**敏感词扫描**：本地词库，不回显命中词；
-  **AI 高频表达检测**）→ AI 语义 → 证据 → 逐项采用 → 双版本 Markdown 导出+摘要
-- **标题评分**：当前标题打分 + 3 候选（分数+理由），采用即写回（AI 不自动写）
-- **编辑器辅助**：选区浮层（改写/去AI味/搜索/核验就地执行）、图片上传（白名单/5MB，image Block 往返不降级）
-- **导出**：单篇 Markdown / 纯文本 / Word / **公众号 HTML（4 主题，复制粘贴进公众号编辑器）**，
-  **项目级 ZIP**（文章+素材+来源+manifest）
-- **素材剪藏**：粘贴网址 → 安全抓取 → 素材库（可溯源）；语义检索（embedding）为已知遗留
-- **工程**：CI（GitHub Actions 双门禁）+ 覆盖率门槛 80% + `scripts/release_gate.py` 发布门禁
-- **安全**：本机绑定；Host 校验 + Origin 强制 + session token 三重守卫
-  （POST/PUT/PATCH/DELETE 一律要求允许的 Origin 与有效 session，缺失即 403；
-  静态页面与健康检查不受限）；DPAPI 加密 Key；每日自动备份；诊断包不含正文/Key
+---
 
-## 环境要求
+## 它和"让 AI 帮你写"的区别
 
-- Windows 10+（安装包模式无需 Python；源码模式需 Python 3.12）
-- 任意 OpenAI 兼容模型 API（DeepSeek / OpenAI / 通义 / Kimi / 智谱 / 自定义；可多套按任务绑定）
+| 常见 AI 写作工具 | 文序 |
+|---|---|
+| 你给个标题，AI 吐一篇 | 你写，AI 在旁边递证据、递候选、挑毛病 |
+| 一键生成，改起来无从下手 | 逐项确认，每次改动可撤销、留版本 |
+| 事实靠模型自信 | 每句主张可查：引用 → 来源 → 核验，搜不到就明说"待核实" |
+| 你的文章上传云端 | 正文只在本机，Key 系统级加密 |
 
-## 安装与启动（Windows 安装包，推荐）
+三条硬原则：**AI 未经确认写入正文 = 0** · **问题在哪，结果就出现在哪** · **外面简单，里面复杂**。
 
-1. 从 GitHub Releases 下载 `Wensu-Setup-vX.Y.Z.exe`（或便携目录 `Wensu/`），安装/解压；
-2. 双击 `Wensu.exe` 或开始菜单「文序」→ 自动打开 http://127.0.0.1:8766；
-3. 右上角 ⚙ 填你自己的模型 API 地址 / 模型名 / API Key（**每个人用自己的 Key，各付各的费**）；
-4. 数据在本机 `%APPDATA%\Wensu\`（数据库/图片/每日备份），卸载不丢数据；关闭窗口即退出服务。
+## 界面
 
-端口被占用时自动改用 8767、8768…（窗口会显示实际地址）。
+三栏工作台：左项目树 · 中写作区 · 右写作助手面板（非对话形态）。
 
-## 源码安装（开发用）
+![编辑界面](docs/screenshots/editor.png)
+
+![写作助手面板](docs/screenshots/assistant.png)
+
+选中任何文字，就地浮出工具条——改写 / 去 AI 味 / 搜索 / 核验，结果就地展开：
+
+![选区浮层](docs/screenshots/selbar.png)
+
+## 核心能力
+
+- **写作**：Block 编辑器（标题/列表/引用/代码/图片/分割线）、自动保存状态机、中文输入法友好、撤销/版本历史/回收站
+- **查资料**：联网搜索 + 中文多引擎（Bing/360/搜狗/百度）并发；句级核验（可信 / 存疑 / 建议修改）；引用落库带证据快照
+- **成稿检查**：格式 / 语言 / 内容 / 事实与引用四类问题逐项列出，每条可定位、可解释、可追溯规则来源；含敏感词扫描与 AI 高频表达检测（本地词表，不回显命中词）
+- **AI 助手面板**：洞察（AI 读你的稿说缺什么）、Ask 流式问答（回答可插入正文/存为素材）、改写与去 AI 味（候选制）、标题评分（打分 + 候选，点"采用"才写回）
+- **证据链**：主张 → 引用 → 来源 → 核验六态；正文改动了，引用自动标"需复查"；模型知识永远打"模型知识"徽章，不冒充实时检索
+- **素材库**：粘贴网址一键剪藏（可溯源）；标签检索；素材与正文的每次使用都有记录
+- **导出**：Markdown / 纯文本 / Word（含引用清单与来源附录）/ 公众号 HTML（4 套排版主题）/ 项目级 ZIP
+- **多模型**：DeepSeek / OpenAI / 通义 / Kimi / 智谱 / 自定义端点，可按任务绑定不同模型
+
+## 快速开始
+
+**方式一：安装包（推荐，无需 Python）**
+
+1. 到 [Releases](https://github.com/zzz123123lll/wensu/releases) 下载 `Wensu-Setup-v0.3.0.exe`；
+2. 安装后双击 `Wensu.exe`（或开始菜单「文序」）→ 自动打开 http://127.0.0.1:8766；
+3. 右上角 ⚙ 填你的模型 API 地址 / 模型名 / API Key；
+4. 开写。数据在本机 `%APPDATA%\Wensu\`（数据库 / 图片 / 每日备份），卸载不丢。
+
+**方式二：便携版** — 下载 `Wensu-v0.3.0-portable.zip`，解压双击 `Wensu\Wensu.exe`。
+
+**方式三：源码（开发）**
 
 ```bash
-cd D:\文序项目\ai-writing-system
 py -3.12 -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
-wensu            # 或 python -m app.cli；任意工作目录可启动
+wensu   # 或 python -m app.cli；任意工作目录可启动
 ```
 
-启动时自动：每日备份数据库 → 打开浏览器（`--no-browser` 关闭）→ 服务就绪。
+## 安全与隐私
 
-## 端口与数据
+- 仅监听 `127.0.0.1`，别人电脑无法访问；Host 校验 + Origin 校验 + 随机 session token 三重守卫
+- API Key 用 Windows DPAPI 加密存储；更换 API 地址自动清除旧 Key
+- 抓取网页走 SSRF 防护；模型输出先校验再进界面；正文永远是不可信数据
+- 诊断包不含正文 / Prompt / Key
 
-| 项 | 值 |
-|----|----|
-| 服务地址 | http://127.0.0.1:8766（仅本机；Host/Origin/session 三重防护，写请求缺任一即 403；占用则自动 +1） |
-| 数据库 | 源码模式 `data\workbench.db`；安装包模式 `%APPDATA%\Wensu\workbench.db`（SQLite，WAL + FK，版本乐观锁） |
-| 备份 | 与数据库同目录 `backups\workbench-YYYYMMDD.db`（每日首次启动自动） |
-| Key 存储 | DPAPI 加密 BLOB；改 base_url origin 自动清 Key |
+## 工程质量
 
-## 测试
-
-```bash
-# 后端单元 + 集成（402 项，覆盖率 81%，--cov=app 门禁 80%）
-env -u PYTHONPATH .\.venv\Scripts\python.exe -m pytest -q
-# 前端单元（7 项，fake transport 不碰网络）
-cd web && npx vitest run
-# 浏览器 E2E（27 项，系统 Chrome + route mock 快速回归）
-cd web && npx playwright test
-# 真实后端 E2E（12 项，Gate B E01~E12：真实 FastAPI + 临时 SQLite + 本地假 LLM）
-cd web && npx playwright test --config playwright.config.real.js
-# 发布门禁（fail-closed：git→ruff→pytest-cov→JS语法→Vitest→Playwright→manifest）
-.\.venv\Scripts\python.exe scripts/release_gate.py --pre-release --allow-dirty
-```
-
-（`env -u PYTHONPATH` 必须：bash 会话会注入 Hermes venv 路径，污染 3.12 解释器）
-
-## 备份与恢复
-
-```bash
-# 每日自动（wensu 启动时）+ 手动：
-.venv\Scripts\python.exe -c "import sqlite3; s=sqlite3.connect('data/workbench.db'); b=sqlite3.connect('data/backups/workbench-manual.db'); s.backup(b); b.close(); s.close()"
-# 恢复：停服务 → 覆盖 data\workbench.db → 启动（自动补迁移）
-```
+- **414 项后端测试 + 7 项前端单元 + 27 项浏览器 E2E + 12 项真实后端 E2E 全绿**
+- 代码覆盖率 81.6%（门禁 ≥80%）；ruff 零错误
+- GitHub Actions 双门禁：每次推送全量回归；打 tag 跑完整发布门禁（fail-closed）
+- 发布产物带 sha256 校验值（见 Release 说明）
 
 ## 文档
 
-- `docs/architecture.md` 层次与真相源
+- `docs/architecture.md` 架构与真相源
 - `docs/api.md` API 契约
-- `docs/data-migrations.md` 迁移/备份/恢复/回滚
-- `docs/security.md` 凭据与网络边界
+- `docs/data-migrations.md` 迁移 / 备份 / 恢复 / 回滚
+- `docs/security.md` 安全边界
 - `docs/testing.md` 测试体系
 
-## 项目结构
+## 已知边界（如实说）
 
-```
-app/           后端（main / db / settings / llm / ai_service / copilot / safe_fetch / blocks / cli）
-app/domains/   领域服务（exports：统一导出装配与渲染；wechat_html：公众号 HTML 片段）
-app/review/    成稿检查（路由/服务/确定性/证据/AI/导出/规则包 packs/*.json；sensitive_words 本地词库）
-web/           正式前端（index.html / style.css / js/ 模块化）
-tests/         后端测试（402 项，覆盖率 81%）
-web/tests/     前端单元（7）+ mock E2E（27）+ 真实后端 E2E（12，Gate B）
-docs/          文档
-data/          数据库与备份（gitignore；uploads/ 图片）
-scripts/       E2E 服务启动器 + release_gate.py 发布门禁
-```
+- 仅支持 Windows 本地单机；云端多用户版明确不做
+- 搜索/核验/剪藏依赖本机外网可达；受限时降级为"模型知识"并诚实标注
+- 素材语义检索（embedding）为已知遗留，当前为关键词 + 标签检索
+- 公众号 HTML 导出中的本地图片需在公众号后台手动上传（平台限制）
 
-## 已知环境注意事项
+## 反馈
 
-1. 本机多解释器（uv 3.11 / 系统 3.12 / Hermes venv）：项目命令一律用 `.venv`（3.12）+ `env -u PYTHONPATH`
-2. `hermes verify` readiness 阶段 FAIL：verify 用 uv 3.11 引导且无 fastapi，属工具环境限制；test 阶段 PASS
-3. 外网选择性受限：Wikipedia/DuckDuckGo 可能不可达，搜索降级为"模型知识线索"（UI 徽章诚实标注）；
-   中文引擎（Bing/360/搜狗/百度）在可达网络下自动启用
-4. 云端多用户版明确不支持（本地桌面版为唯一支持形态）
-5. 素材语义检索（embedding 向量检索）为已知遗留：本地轻量形态不引入嵌入模型依赖，当前为关键词+标签检索
+用得不顺手、遇到 bug、想要某个功能，欢迎到 [Issues](https://github.com/zzz123123lll/wensu/issues) 留言——特别是真实写作场景里的卡点，那是这个项目最需要的东西。
+
+---
+
+*一个人从"脑子里有点东西"写到"一篇真正属于自己的作品"，AI 全程在场。*
