@@ -500,6 +500,29 @@ $('#mat-q').addEventListener('input', debounce(loadMaterials, 300));
 $('#mat-tag').addEventListener('input', debounce(loadMaterials, 300));
 $('#mat-scope-all').addEventListener('click', () => { matScope = 'all'; refreshMatScope(); loadMaterials(); });
 $('#mat-scope-proj').addEventListener('click', () => { matScope = 'proj'; refreshMatScope(); loadMaterials(); });
+$('#mat-clip-btn').addEventListener('click', clipUrl);
+$('#mat-clip-url').addEventListener('keydown', e => { if (e.key === 'Enter') clipUrl(); });
+
+/* 剪藏（P2-⑧）：粘贴网址 → 安全抓取 → 存 Source + Material，可溯源 */
+async function clipUrl() {
+  const input = $('#mat-clip-url');
+  const url = input.value.trim();
+  if (!url) return;
+  const pid = currentProjectId();
+  if (!pid) { toast_('先打开一个项目'); return; }
+  const btn = $('#mat-clip-btn');
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/projects/${pid}/clip`, { method: 'POST', body: JSON.stringify({ url }) });
+    toast_('已收藏为素材：' + (r.title || '网页').slice(0, 20));
+    input.value = '';
+    loadMaterials();
+  } catch (e) {
+    toast_('收藏失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 function refreshMatScope() {
   $('#mat-scope-all').classList.toggle('on', matScope === 'all');

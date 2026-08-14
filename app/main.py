@@ -213,6 +213,10 @@ class SourceIn(BaseModel):
     provider: str = ""
 
 
+class ClipIn(BaseModel):
+    url: str
+
+
 # 标签上限：数量与单个长度（P0-2 统一边界校验）
 MAX_MATERIAL_TAGS = 20
 MAX_TAG_LEN = 30
@@ -1228,6 +1232,32 @@ def api_project_export(pid: int):
                         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"})
     except ValueError as e:
         raise HTTPException(400, f"无法生成安全的文件名：{e}")
+    finally:
+        conn.close()
+
+
+@app.post("/api/projects/{pid}/clip")
+def api_clip(pid: int, body: ClipIn):
+    """剪藏（P2-⑧）：安全抓取网页 → 存 Source + Material（可溯源，收藏即入素材库）。"""
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(400, "网址不能为空")
+    conn = _conn()
+    try:
+        if not any(p[0] == pid for p in db.list_projects(conn)):
+            raise HTTPException(404, "项目不存在")
+        try:
+            snap = safe_fetch.fetch_url(url)
+        except safe_fetch.SafeFetchError as e:
+            raise HTTPException(400, f"抓取失败：{e}")
+        excerpt = (snap.get("excerpt") or "").strip()
+        if not excerpt:
+            raise HTTPException(400, "未能从该网页提取到文本内容（可能是不支持的类型）")
+        title = excerpt[:40]
+        sid = db.create_source(conn, pid, snap.get("final_url") or url,
+                               title=title, snippet=excerpt[:500], provider="clip")
+        mid = db.create_material(conn, pid, title, excerpt[:5000], sid, tags=["剪藏"])
+        return {"material_id": mid, "source_id": sid, "title": title, "chars": len(excerpt)}
     finally:
         conn.close()
 

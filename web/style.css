@@ -312,6 +312,8 @@ sup.cite { color: var(--accent); font-weight: 700; font-size: 11px; margin-left:
 .mat-card { width: 460px; max-height: 80vh; display: flex; flex-direction: column; }
 .mat-tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
 .mat-tools input { flex: 1; }
+.mat-clip { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.mat-clip input { flex: 1; font-size: 12px; padding: 5px 8px; }
 .mat-filters { margin-bottom: 8px; }
 .mat-filters input { width: 100%; font-size: 12px; padding: 5px 8px; }
 .mat-list { overflow-y: auto; max-height: 55vh; }
