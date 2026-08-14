@@ -75,19 +75,21 @@ def test_migrate_failure_rolls_back(monkeypatch):
     """迁移失败回滚：失败的版本不记录，已应用版本保留。"""
     conn = db.connect(":memory:")
     db.migrate(conn)
-    # 注入一个会失败的 v9 迁移（语法错误）
+    base = len(db.MIGRATIONS)
+    # 注入一个会失败的 v{base+1} 迁移（语法错误）
     monkeypatch.setattr(db, "MIGRATIONS", [
-        *[db.MIGRATIONS[i] for i in range(8)],  # v1..v8 正常
+        *[db.MIGRATIONS[i] for i in range(base)],  # v1..vN 正常
         ["CREATE TABLE broken_table (id"],  # 未闭合，必然失败
     ])
     with pytest.raises(Exception):
         db.migrate(conn)
-    # 失败的 v9 未记录
-    n = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 9").fetchone()["n"]
+    # 失败的 v{base+1} 未记录
+    n = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = ?",
+                     (base + 1,)).fetchone()["n"]
     assert n == 0
-    # v1-v8 记录仍在，后续可重试
+    # 既有版本记录仍在，后续可重试
     n2 = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()["n"]
-    assert n2 == 8
+    assert n2 == base
 
 
 # ---------- 乐观锁与原子性 ----------
