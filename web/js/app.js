@@ -490,6 +490,11 @@ $('#modal-close').addEventListener('click', closeSettings);
 let matScope = 'all'; // all | proj
 
 $('#btn-materials').addEventListener('click', openMaterials);
+$('#btn-proj-export').addEventListener('click', () => {
+  const pid = currentProjectId();
+  if (!pid) { toast_('先打开一个项目'); return; }
+  location.href = `/api/projects/${pid}/export`;
+});
 $('#materials-close').addEventListener('click', () => { $('#materials-modal').style.display = 'none'; });
 $('#mat-q').addEventListener('input', debounce(loadMaterials, 300));
 $('#mat-tag').addEventListener('input', debounce(loadMaterials, 300));

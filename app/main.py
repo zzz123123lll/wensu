@@ -1212,6 +1212,26 @@ def api_export_article(aid: int, format: str = "md", appendix: int = 1, theme: s
         conn.close()
 
 
+@app.get("/api/projects/{pid}/export")
+def api_project_export(pid: int):
+    """项目级 ZIP 导出：文章 Markdown + 素材/来源清单 + manifest（只读，不修改数据）。"""
+    conn = _conn()
+    try:
+        try:
+            raw = export_service.build_project_export(conn, pid)
+            name = export_service.project_name(conn, pid)
+        except export_service.ExportError as e:
+            raise HTTPException(404, str(e))
+        fname = export_service.safe_filename(name, "zip")
+        quoted = urllib.parse.quote(fname)
+        return Response(content=raw, media_type="application/zip",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"})
+    except ValueError as e:
+        raise HTTPException(400, f"无法生成安全的文件名：{e}")
+    finally:
+        conn.close()
+
+
 app.include_router(review_router)
 
 

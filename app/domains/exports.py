@@ -8,7 +8,9 @@
 """
 
 import io
+import json
 import re
+import zipfile
 from datetime import datetime, timezone
 
 from app import blocks as blocks_lib
@@ -272,7 +274,7 @@ def safe_filename(title: str, fmt: str, existing: list[str] | None = None) -> st
     cleaned = _UNSAFE.sub("_", (title or "文章").strip()) or "文章"
     cleaned = re.sub(r"\.{2,}", ".", cleaned)  # 连续点号（如 a..b）在部分文件系统有特殊语义
     cleaned = cleaned[:40]
-    ext = "docx" if fmt == "docx" else ("txt" if fmt == "txt" else ("html" if fmt in ("wechat",) else "md"))
+    ext = "docx" if fmt == "docx" else ("txt" if fmt == "txt" else ("html" if fmt in ("wechat",) else ("zip" if fmt == "zip" else "md")))
     name = f"{cleaned}-{_now()[:10]}.{ext}"
     if existing and name in existing:
         ts = datetime.now().strftime("%H%M%S")
@@ -280,3 +282,63 @@ def safe_filename(title: str, fmt: str, existing: list[str] | None = None) -> st
     if ".." in name or name.startswith("/") or name.startswith("\\"):
         raise ValueError("非法文件名")
     return name
+
+
+# ---------- 项目级导出（P2-⑩） ----------
+
+def project_name(conn, pid: int) -> str:
+    """项目名（不存在抛 ExportError）。"""
+    for p in db.list_projects(conn):
+        if p[0] == pid:
+            return p[1]
+    raise ExportError(f"项目 {pid} 不存在")
+
+
+def build_project_export(conn, pid: int) -> bytes:
+    """项目级 ZIP：manifest + 每篇 Markdown + 素材清单 + 来源清单。只读导出。"""
+    name = project_name(conn, pid)
+    arts = db.list_articles(conn, pid)
+    materials = db.list_materials(conn, project_id=pid)
+    sources = db.list_sources(conn, pid)
+    root = name[:30] or "项目"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        manifest = {
+            "product": "文序",
+            "project": name,
+            "exported_at": _now(),
+            "articles": [],
+            "materials_count": len(materials),
+            "sources_count": len(sources),
+        }
+        for aid, title, _updated in arts:
+            data = build_export_data(conn, aid)
+            md = render_markdown(data)
+            zf.writestr(f"{root}/文章/{safe_filename(title, 'md')}", md)
+            manifest["articles"].append({
+                "id": aid,
+                "title": title,
+                "version": data["article"]["version"],
+                "citations_count": len(data["citations"]),
+            })
+        if materials:
+            lines = ["# 素材清单", ""]
+            for m in materials:
+                lines.append(f"## {m['title']}")
+                lines.append("")
+                lines.append(str(m.get("content") or "")[:2000])
+                lines.append("")
+                tags = m.get("tags") or []
+                if tags:
+                    lines.append("标签：" + "、".join(str(t) for t in tags))
+                    lines.append("")
+            zf.writestr(f"{root}/素材清单.md", "\n".join(lines))
+        if sources:
+            lines = ["# 来源清单", ""]
+            for s in sources:
+                title = s.get("title") or "（无标题）"
+                url = s.get("url") or s.get("canonical_url") or ""
+                lines.append(f"- {title}" + (f"：{url}" if url else ""))
+            zf.writestr(f"{root}/来源清单.md", "\n".join(lines))
+        zf.writestr(f"{root}/manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    return buf.getvalue()
