@@ -7,7 +7,7 @@ cd D:\文序项目\ai-writing-system
 env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q
 ```
 
-**当前规模：313 项全部通过（2026-08-13 Gate B 修复后实测）**
+**当前规模：402 项全部通过（2026-08-14 差距修复批次实测），覆盖率 81%（门禁 ≥80%）**
 
 | 文件 | 覆盖 |
 |---|---|
@@ -31,13 +31,21 @@ env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q
 | test_gateb_position.py | P1-5 继续写位置保存/恢复/失效回退 |
 | test_gateb_migration.py | v1/v5/v7 升级链、重复迁移、失败回滚、旧数据兼容 |
 | test_gateb_backup.py | SQLite backup API 完整备份→恢复→数量与关系校验 |
+| test_review_*.py | 成稿检查：规则内核/解析器/确定性/AI/证据/导出/导入/API/敏感词/ai-trace |
+| test_search_engines.py | 中文引擎适配器（fixture 解析 + 并发合并/去重/失败可观测，不碰公网） |
+| test_wechat_html.py | 公众号 HTML 转换（主题/URL 白名单/转义）与 wechat 导出装配 |
+| test_streaming.py | llm.chat_stream（SSE/回退）+ ask/rewrite 流式事件 + API NDJSON |
+| test_uploads.py | 图片上传（MIME 白名单/大小/uuid 文件名/静态服务） |
+| test_project_export.py | 项目级 ZIP（manifest/文章/素材/来源） |
+| test_clip.py | 剪藏（抓取→Source+Material，失败诚实报错） |
+| test_p0_humanize_title.py | 去 AI 味（本地痕迹/规则/flavor）与标题评分 |
 
 ## 前端（Vitest + Playwright，web/ 下）
 
 ```
 cd web
 npx vitest run          # 单元测试（7 项，fake transport 不碰真实网络）
-npx playwright test     # mock E2E（23 项）：系统 Chrome，route mock 快速回归
+npx playwright test     # mock E2E（27 项）：系统 Chrome，route mock 快速回归
 npx playwright test --config playwright.config.real.js  # 真实后端 E2E（12 项，Gate B E01~E12）
 ```
 

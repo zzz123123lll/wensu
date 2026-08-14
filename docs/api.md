@@ -18,19 +18,24 @@
 | POST | /api/articles/{aid}/restore | 从回收站恢复 |
 | GET | /api/articles/{aid}/revisions | 版本历史（含 before/after 快照、来源对象、状态） |
 | POST | /api/articles/{aid}/revisions/{v}/restore | 恢复历史版本 `?point=after|before`（after=该版本正文；before=撤销这一次插入/改写）；恢复动作本身留 Revision(revision_restore) |
-| GET | /api/articles/{aid}/export | 统一导出 `?format=md|txt|docx&appendix=0|1`（含引用清单+核验状态+来源附录；只读不改稿） |
+| GET | /api/articles/{aid}/export | 统一导出 `?format=md|txt|docx|wechat&theme=default|elegant|simple|tech&appendix=0|1`（wechat=公众号编辑器可粘贴的行内样式 HTML 片段；只读不改稿） |
 | GET | /api/articles/{aid}/continue | 继续写：上次位置/最近素材/待办/待复查引用/一句下一步 |
 | PUT | /api/articles/{aid}/position | 保存本地写作位置 `{block_id, offset, scroll_top}`（不改变正文/版本） |
 | GET | /api/articles/{aid}/asks | Ask 历史（按草稿隔离） |
+| GET | /api/projects/{pid}/export | 项目级 ZIP 导出（文章 MD+素材/来源清单+manifest；只读） |
+| POST | /api/projects/{pid}/clip | 剪藏 `{url}`：安全抓取 → Source+Material 落库（可溯源） |
 
 ## AI 链路（任务可绑定不同模型 profile）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | /api/ai/ask | `{prompt, context, article_id}` → 注入偏好+历史；存 Ask 历史 |
-| POST | /api/ai/rewrite | `{text, anchor...}` → 候选列表 + model |
+| POST | /api/ai/ask/stream | 同 ask，NDJSON：`token*` → `result{reply,model,ask_id}` \| `error`（历史在 result 前落库） |
+| POST | /api/ai/rewrite | `{text, flavor=default|de-ai, anchor...}` → 候选列表 + model |
+| POST | /api/ai/rewrite/stream | 同 rewrite，NDJSON：`token*` → `result{candidates}` \| `error` |
+| POST | /api/ai/title-score | `{title, context}` → 当前标题打分 + 3 候选（分数+理由） |
 | POST | /api/ai/insight | `{title, blocks}` → 洞察 + 建议 |
-| POST | /api/ai/search | `{query, stream, anchor}`；stream=true 返回 NDJSON：`{"type":"stage"}` → `{"type":"result"}` |
+| POST | /api/ai/search | `{query, stream, anchor}`；stream=true 返回 NDJSON：`{"type":"stage"}` → `{"type":"result"}`；web 源=维基+DDG+中文引擎（Bing/360/搜狗/百度/DDG-html）并发合并去重 |
 | POST | /api/ai/check | `{claim, anchor}` → 三态核验 + evidence 列表 |
 
 ## 证据数据层
@@ -91,3 +96,4 @@ AI/证据失败不阻塞，warning 事件告知；stream 重试幂等（同 fing
 | GET | /api/session | 下发随机 session token（HttpOnly） |
 | GET | /api/diagnostics | 诊断包（无 key/正文/prompt） |
 | GET/PUT | /api/settings | 默认模型配置（DPAPI 加密；origin 变化清 Key） |
+| POST | /api/uploads/image | 图片上传（multipart；MIME 白名单 png/jpg/gif/webp、5MB、uuid 文件名）→ `{url}`；`GET /uploads/{name}` 静态服务 |

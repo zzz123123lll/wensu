@@ -17,10 +17,16 @@
   统一记录 before/after 快照，可从版本历史恢复或撤销单次修改
 - **继续写**：上次编辑位置（块 + 光标 + 滚动）、最近素材、待处理检查、待复查引用、
   一句可解释的下一步；位置属本地写作状态，不进模型上下文
-- **AI 五链路**：Ask（偏好+历史上下文）/ 改写（段下候选，选中即改）/ 洞察（手动触发）/
-  搜索（NDJSON 流式+缓存）/ 核验（证据型）
-- **成稿检查**：规则包四层 Profile → 确定性检查 → AI 语义 → 证据 → 逐项采用 →
-  双版本 Markdown 导出+摘要
+- **AI 五链路**：Ask（偏好+历史上下文，**token 流式**）/ 改写（段下候选，**流式+进度**，**去AI味 flavor**）/
+  洞察（手动触发）/ 搜索（NDJSON 流式+缓存，**维基+DDG+中文多引擎 Bing/360/搜狗/百度 并发合并**）/ 核验（证据型）
+- **成稿检查**：规则包四层 Profile → 确定性检查（含**敏感词扫描**：本地词库，不回显命中词；
+  **AI 高频表达检测**）→ AI 语义 → 证据 → 逐项采用 → 双版本 Markdown 导出+摘要
+- **标题评分**：当前标题打分 + 3 候选（分数+理由），采用即写回（AI 不自动写）
+- **编辑器辅助**：选区浮层（改写/去AI味/搜索/核验就地执行）、图片上传（白名单/5MB，image Block 往返不降级）
+- **导出**：单篇 Markdown / 纯文本 / Word / **公众号 HTML（4 主题，复制粘贴进公众号编辑器）**，
+  **项目级 ZIP**（文章+素材+来源+manifest）
+- **素材剪藏**：粘贴网址 → 安全抓取 → 素材库（可溯源）；语义检索（embedding）为已知遗留
+- **工程**：CI（GitHub Actions 双门禁）+ 覆盖率门槛 80% + `scripts/release_gate.py` 发布门禁
 - **安全**：本机绑定；Host 校验 + Origin 强制 + session token 三重守卫
   （POST/PUT/PATCH/DELETE 一律要求允许的 Origin 与有效 session，缺失即 403；
   静态页面与健康检查不受限）；DPAPI 加密 Key；每日自动备份；诊断包不含正文/Key
@@ -62,14 +68,16 @@ wensu            # 或 python -m app.cli；任意工作目录可启动
 ## 测试
 
 ```bash
-# 后端单元 + 集成（313 项，2026-08-13 Gate B 实测全绿）
+# 后端单元 + 集成（402 项，覆盖率 81%，--cov=app 门禁 80%）
 env -u PYTHONPATH .\.venv\Scripts\python.exe -m pytest -q
 # 前端单元（7 项，fake transport 不碰网络）
 cd web && npx vitest run
-# 浏览器 E2E（23 项，系统 Chrome + route mock 快速回归）
+# 浏览器 E2E（27 项，系统 Chrome + route mock 快速回归）
 cd web && npx playwright test
 # 真实后端 E2E（12 项，Gate B E01~E12：真实 FastAPI + 临时 SQLite + 本地假 LLM）
 cd web && npx playwright test --config playwright.config.real.js
+# 发布门禁（fail-closed：git→ruff→pytest-cov→JS语法→Vitest→Playwright→manifest）
+.\.venv\Scripts\python.exe scripts/release_gate.py --pre-release --allow-dirty
 ```
 
 （`env -u PYTHONPATH` 必须：bash 会话会注入 Hermes venv 路径，污染 3.12 解释器）
@@ -94,19 +102,21 @@ cd web && npx playwright test --config playwright.config.real.js
 
 ```
 app/           后端（main / db / settings / llm / ai_service / copilot / safe_fetch / blocks / cli）
-app/domains/   领域服务（exports：统一导出装配与渲染）
-app/review/    成稿检查（路由/服务/确定性/证据/AI/导出/规则包 packs/*.json）
+app/domains/   领域服务（exports：统一导出装配与渲染；wechat_html：公众号 HTML 片段）
+app/review/    成稿检查（路由/服务/确定性/证据/AI/导出/规则包 packs/*.json；sensitive_words 本地词库）
 web/           正式前端（index.html / style.css / js/ 模块化）
-tests/         后端测试（313 项）
-web/tests/     前端单元（7）+ mock E2E（23）+ 真实后端 E2E（12，Gate B）
+tests/         后端测试（402 项，覆盖率 81%）
+web/tests/     前端单元（7）+ mock E2E（27）+ 真实后端 E2E（12，Gate B）
 docs/          文档
-data/          数据库与备份（gitignore）
-scripts/       E2E 服务启动器（fake_llm / e2e_app / launcher）
+data/          数据库与备份（gitignore；uploads/ 图片）
+scripts/       E2E 服务启动器 + release_gate.py 发布门禁
 ```
 
 ## 已知环境注意事项
 
 1. 本机多解释器（uv 3.11 / 系统 3.12 / Hermes venv）：项目命令一律用 `.venv`（3.12）+ `env -u PYTHONPATH`
 2. `hermes verify` readiness 阶段 FAIL：verify 用 uv 3.11 引导且无 fastapi，属工具环境限制；test 阶段 PASS
-3. 外网选择性受限：Wikipedia/DuckDuckGo 可能不可达，搜索降级为"模型知识线索"（UI 徽章诚实标注）
+3. 外网选择性受限：Wikipedia/DuckDuckGo 可能不可达，搜索降级为"模型知识线索"（UI 徽章诚实标注）；
+   中文引擎（Bing/360/搜狗/百度）在可达网络下自动启用
 4. 云端多用户版明确不支持（本地桌面版为唯一支持形态）
+5. 素材语义检索（embedding 向量检索）为已知遗留：本地轻量形态不引入嵌入模型依赖，当前为关键词+标签检索
