@@ -15,7 +15,8 @@ def test_db_path_dev_mode_is_project_data_dir(monkeypatch):
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.delenv("WENSU_DB", raising=False)
     path = db._default_db_dir()
-    assert path.endswith(os.path.join("ai-writing-system", "data"))
+    expected = os.path.join(os.path.dirname(os.path.dirname(db.__file__)), "data")
+    assert path == expected
 
 
 def test_db_path_frozen_mode_uses_appdata(monkeypatch):
